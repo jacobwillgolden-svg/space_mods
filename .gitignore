@@ -1,0 +1,11 @@
+# What tools/wallpaper.py makes: rebuilt on demand, megabytes each.
+wallpapers/
+
+# Reference pictures that are not this repo's to publish.
+concept/
+
+__pycache__/
+*.pyc
+node_modules/
+.idea/
+.claude/settings.local.json

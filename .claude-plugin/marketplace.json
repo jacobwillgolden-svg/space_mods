@@ -1,0 +1,14 @@
+{
+  "name": "space-mods",
+  "owner": {
+    "name": "jacobwillgolden-svg"
+  },
+  "description": "Space for Claude Code, in pixels: planets, moons and spacecraft drawn in code",
+  "plugins": [
+    {
+      "name": "pixel-probe",
+      "source": "./pixel-probe",
+      "description": "A pixel-art space probe beside the chat, orbiting a world that tracks Claude's effort level"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "name": "pixel-probe",
+  "version": "0.1.0",
+  "description": "A pixel-art space probe beside the chat, orbiting a world that tracks Claude's effort level",
+  "author": {
+    "name": "jacobwillgolden-svg"
+  },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
