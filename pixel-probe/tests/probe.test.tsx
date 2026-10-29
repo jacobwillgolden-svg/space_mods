@@ -6,6 +6,7 @@ import { moveOf } from '../hooks/apollo'
 import { describe } from '../hooks/caption'
 import type { Told, Words } from '../hooks/caption'
 import { CRAFT } from '../hooks/craft'
+import { moonChart } from '../hooks/earth'
 import { ENDING_TICKS, LEAVE_SECONDS, TICK_MS, progressStage, toFrame } from '../hooks/frame'
 import type { FrameState } from '../hooks/frame'
 import { ROCKS } from '../hooks/rock'
@@ -447,6 +448,45 @@ test('Apollo 11 draws at every part of its flight, the same each time', { timeou
   // A still picture, as the dashboard draws Apollo waiting: on the pad.
   const still = toFrame(flying(undefined))
   expect(describe(still, { level: 'high', seen: null, working: false }).caption).toBe('ignition · all engines running')
+})
+
+test('once the flag is up a drag turns the eye on the Moon, and up to the west Earth hangs small and blue', () => {
+  const moonwalk = (tick: number) => flying(tick, { phase: 'ending', since: 600, ended: 600, landed: 300, stepped: 300, acted: 300 })
+  const drawn = (state: FrameState, view?: FrameState['view']) => drawScene(toFrame({ ...state, ...(view ? { view } : {}) }), 160, 120).color
+  // Blue enough to be Earth's seas, in the upper half where only sky is when looking up.
+  const blue = (colors: Uint32Array) => [...colors.subarray(0, 160 * 60)].filter(color => (color & 255) > ((color >> 16) & 255) + 40 && (color & 255) > 90).length
+  const towardEarth = { ...USUAL_VIEW, spin: 1.57, tip: 0.9 }
+
+  // The flag up: the usual view is the picture as it was; turned, Earth is there.
+  const flagUp = moonwalk(980)
+  expect(drawn(flagUp, USUAL_VIEW)).toEqual(drawn(flagUp))
+  expect(blue(drawn(flagUp, towardEarth))).toBeGreaterThan(0)
+
+  // Before the flag the drag leaves the picture alone.
+  const onTheLadder = moonwalk(830)
+  expect(drawn(onTheLadder, towardEarth)).toEqual(drawn(onTheLadder))
+})
+
+test("the Moon's craters are pressed in as slopes for the sun to catch, fewer on its seas than its highlands", () => {
+  const face = moonChart(256)
+  const bumps = face.bumps ?? new Float32Array(0)
+  // How rough a patch of the face is, by latitude and longitude in degrees.
+  const roughness = (south: number, north: number, west: number, east: number) => {
+    let [sum, count] = [0, 0]
+    for (let y = 0; y < face.height; y++) {
+      const lat = 90 - ((y + 0.5) / face.height) * 180
+      if (lat < south || lat > north) continue
+      for (let x = 0; x < face.width; x++) {
+        const lon = ((x + 0.5) / face.width) * 360 - 180
+        if (lon < west || lon > east) continue
+        sum += Math.hypot(bumps[2 * (y * face.width + x)] ?? 0, bumps[2 * (y * face.width + x) + 1] ?? 0)
+        count++
+      }
+    }
+    return sum / count
+  }
+  // The southern highlands against the Sea of Tranquility.
+  expect(roughness(-35, -15, -5, 15)).toBeGreaterThan(roughness(2, 14, 24, 38) * 1.5)
 })
 
 test('a mode change mid-turn swaps the scene at once', async ($, on) => {

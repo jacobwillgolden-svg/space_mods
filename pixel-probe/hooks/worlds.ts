@@ -215,9 +215,10 @@ const BY_EFFORT: Record<Effort, WorldName> = {
 export const worldFor = (effort: Effort | null): WorldName => BY_EFFORT[effort ?? 'none']
 
 // A world's face laid flat, longitude across from -π and latitude down from
-// the north pole, and its clouds' cover where it has any: made once for each
-// size it is drawn at, then only looked up.
-export type Chart = { width: number; height: number; colors: Uint32Array; clouds?: Float32Array }
+// the north pole, its clouds' cover where it has any, and where its ground
+// slopes (east, then north, a pair a texel) for the light to catch: made once
+// for each size it is drawn at, then only looked up.
+export type Chart = { width: number; height: number; colors: Uint32Array; clouds?: Float32Array; bumps?: Float32Array }
 
 const charts = new Map<string, Chart>()
 

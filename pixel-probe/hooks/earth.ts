@@ -4,9 +4,11 @@ import type { Chart } from './worlds'
 
 // The real Earth and Moon, for Apollo 11. Earth's land is Natural Earth's
 // 1:110m outlines (public domain), simplified to half a degree and filled in
-// here a row at a time; the Moon's near side is its seas and brightest
-// craters where they lie. Both are faces laid flat as worlds.ts lays them:
-// longitude across from -π, latitude down from the north pole.
+// here a row at a time; the Moon's seas are where NASA's Lunar
+// Reconnaissance Orbiter maps them (public domain), its named craters where
+// they lie, and the rest of its craters spread as the Moon's are. Both are
+// faces laid flat as worlds.ts lays them: longitude across from -π, latitude
+// down from the north pole.
 
 // Each ring of the land's outlines, "lon,lat" pairs in half degrees, the
 // biggest first: Eurasia, Africa, the Americas, Antarctica, then islands.
@@ -186,55 +188,422 @@ export function earthChart(width: number): Chart {
   return made
 }
 
-// The Moon's seas, by their middles in degrees and their half-widths in
-// degrees of arc across and up: Procellarum in several, as it sprawls.
-const SEAS: readonly (readonly [number, number, number, number])[] = [
-  [33, -16, 18, 15], // Imbrium
-  [28, 17.5, 11, 11], // Serenitatis
-  [8.5, 31, 13, 11], // Tranquillitatis
-  [17, 59, 9.5, 7.5], // Crisium
-  [-7.8, 51.3, 8, 13], // Fecunditatis
-  [-15.2, 35.5, 5.5, 5.5], // Nectaris
-  [-21, -17, 12, 10], // Nubium
-  [-24.4, -38.6, 6.5, 6.5], // Humorum
-  [-10, -23, 6, 6], // Cognitum
-  [7.5, -31, 9, 7], // Insularum
-  [13.3, 3.6, 4, 4], // Vaporum
-  [56, 2, 30, 6], // Frigoris
-  [2.4, 1.7, 3.5, 3], // Sinus Medii
-  [11, -9, 4, 3], // Sinus Aestuum
-  [30, -52, 13, 14], // Procellarum
-  [12, -55, 12, 14],
-  [-2, -46, 10, 10],
-  [42, -45, 8, 8],
-  [1.3, 87.5, 6, 6], // Smythii
-  [13.3, 86.1, 5, 4], // Marginis
-  [-19.4, -92.8, 4, 4], // Orientale
-  [27.3, 147.9, 4, 4], // Moscoviense, on the far side
-  // Where the seas run into one another.
-  [20, 25, 6, 6],
-  [0, 41, 8, 8],
-  [-6, -20, 7, 6],
-  [20, -33, 8, 7],
+// The Moon's seas, the dark basalt plains, as NASA's Lunar Reconnaissance
+// Orbiter maps them: its albedo map (public domain) blurred and read for
+// where it is dark. For each half-degree row of latitude from the north
+// pole down, the half-degree columns from 180° west where sea begins and ends.
+const MARIA: readonly string[] = [
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '317,318',
+  '313,327 331,336 350,354',
+  '308,340 347,357',
+  '306,359',
+  '305,360',
+  '305,361',
+  '311,362',
+  '312,365',
+  '312,339 345,368 387,388 400,402 412,416',
+  '275,287 313,335 348,358 363,369 387,389 398,405 409,426',
+  '272,291 314,332 364,370 387,391 397,428',
+  '270,291 322,330 365,371 387,391 396,430',
+  '213,223 268,290 325,325 365,371 387,431',
+  '212,225 261,289 365,371 386,432',
+  '211,227 258,269 277,284 365,371 386,432',
+  '211,227 255,268 365,369 386,432',
+  '211,228 249,268 366,368 386,432',
+  '211,229 247,268 339,344 386,393 399,431',
+  '212,230 244,269 338,345 386,390 404,430',
+  '212,269 322,324 337,345 406,429',
+  '212,270 319,327 337,345 406,428',
+  '211,270 317,330 336,345 407,419 421,427',
+  '209,271 315,345 409,415 423,426',
+  '208,271 313,346',
+  '207,271 312,347',
+  '207,271 300,301 311,349',
+  '206,269 297,304 310,350',
+  '205,267 295,352',
+  '204,264 291,353',
+  '203,263 290,355',
+  '202,263 289,356',
+  '201,263 288,357',
+  '200,264 288,358',
+  '199,265 288,358 410,410',
+  '199,266 288,359 410,411',
+  '199,268 288,359 410,411',
+  '198,269 288,360 410,411',
+  '197,271 288,360 409,412',
+  '197,272 277,280 287,361 408,412',
+  '197,281 287,361 404,413',
+  '197,282 286,362 403,413',
+  '197,363 403,414',
+  '197,363 403,417 429,431',
+  '197,364 403,419 427,433',
+  '197,365 403,420 426,434',
+  '197,367 403,421 425,435',
+  '197,368 388,389 403,435',
+  '196,368 386,393 403,435',
+  '196,369 385,396 402,435',
+  '196,369 383,435',
+  '196,370 382,435',
+  '196,371 381,435',
+  '196,372 381,435',
+  '196,361 363,372 380,435',
+  '195,360 364,373 379,420 423,433',
+  '194,359 364,374 378,419 424,431',
+  '194,360 364,375 377,418 425,430',
+  '193,360 364,418 426,429',
+  '193,360 364,417',
+  '193,360 364,417',
+  '193,360 365,418',
+  '193,360 365,418 659,660',
+  '193,360 365,419 657,662',
+  '192,361 365,420 655,663',
+  '192,362 365,421 654,664',
+  '192,422 653,664',
+  '191,423 651,664',
+  '191,423 650,665',
+  '191,423 650,665',
+  '191,423 649,664',
+  '191,423 649,664',
+  '192,262 265,423 649,664',
+  '193,261 266,423 649,663',
+  '193,261 267,423 650,663',
+  '194,260 267,365 370,423 651,662',
+  '194,260 268,361 370,423 475,485 652,660',
+  '195,260 267,356 369,424 473,485',
+  '196,261 267,356 369,424 471,486',
+  '197,355 368,424 469,496',
+  '198,355 368,424 432,435 465,497',
+  '199,355 367,424 431,435 463,497',
+  '200,355 367,425 428,436 463,497',
+  '201,355 366,436 462,497',
+  '201,355 365,437 462,497',
+  '202,355 363,438 462,498',
+  '203,355 360,439 462,498',
+  '204,354 359,440 462,498',
+  '204,355 357,441 463,498 525,529',
+  '204,441 463,498 524,530',
+  '205,442 463,498 523,531',
+  '205,442 463,498 523,532',
+  '205,442 463,498 523,533',
+  '206,302 306,442 463,498 522,535',
+  '206,302 307,311 322,443 463,497 513,514 522,541',
+  '206,302 310,310 325,443 463,497 514,517 520,544',
+  '207,302 327,444 463,492 495,495 515,546',
+  '208,302 329,446 463,490 520,547',
+  '208,302 329,447 464,489 521,548',
+  '209,302 330,449 465,489 521,548',
+  '211,302 330,450 466,488 522,548',
+  '212,302 330,451 467,487 522,548',
+  '214,303 329,451 468,487 523,548',
+  '217,303 329,452 469,486 526,547',
+  '219,282 287,305 328,453 471,483 527,544',
+  '221,281 289,306 327,385 387,454 473,475 527,540',
+  '222,280 290,307 327,383 389,455 494,500 527,538',
+  '223,280 290,308 325,382 389,456 493,502 527,537',
+  '223,280 290,309 324,358 363,382 390,457 492,502 528,536',
+  '224,280 290,309 321,354 365,381 390,459 490,503 529,535',
+  '225,281 290,309 316,354 370,378 391,461 489,503 531,535',
+  '226,282 290,309 315,354 372,375 391,463 489,503 532,535',
+  '227,283 289,308 315,355 391,464 489,502 532,536',
+  '228,285 287,309 314,358 391,466 489,501 531,538',
+  '229,309 314,359 391,467 489,500 531,541',
+  '229,360 391,469 489,498 530,543',
+  '229,361 392,472 489,497 529,544',
+  '230,362 393,479 489,496 528,544',
+  '230,362 394,483 488,495 526,545',
+  '230,363 395,495 525,545',
+  '229,363 395,495 524,545',
+  '229,363 396,495 523,545',
+  '229,363 396,425 429,496 523,545',
+  '229,362 397,424 431,496 522,545',
+  '229,362 399,423 433,496 521,545',
+  '229,346 350,362 401,423 435,496 521,544',
+  '229,345 353,361 404,422 438,495 521,544',
+  '230,343 354,361 407,422 439,491 521,544',
+  '231,341 357,358 409,421 439,488 521,544',
+  '232,339 410,421 440,487 521,543',
+  '233,338 410,421 440,487 521,539',
+  '222,225 233,337 410,421 440,487 521,537',
+  '220,226 234,337 410,420 440,487 522,536',
+  '219,226 235,337 409,420 440,487 522,536',
+  '219,227 235,338 409,420 440,487 523,535',
+  '218,226 236,338 408,420 440,485 524,536',
+  '218,226 236,339 408,420 441,481 525,536',
+  '218,226 237,340 409,420 441,479 526,536',
+  '219,225 237,341 410,420 442,477 527,535',
+  '220,224 237,342 411,420 443,476 528,534',
+  '222,223 238,343 414,419 444,475',
+  '239,343 416,419 445,474',
+  '240,344 446,474',
+  '241,344 447,474',
+  '241,344 426,427 448,474',
+  '242,344 425,430 448,475',
+  '243,344 425,432 449,475',
+  '244,345 424,434 449,476',
+  '245,346 424,435 451,477',
+  '245,348 424,435 456,477',
+  '246,349 423,436 459,477',
+  '247,349 422,436 464,477',
+  '248,349 422,436 465,477',
+  '251,278 281,349 421,436 466,476',
+  '253,277 281,349 421,436 466,476 483,487',
+  '253,276 281,348 421,436 465,476 482,488',
+  '253,274 281,348 421,436 465,476 481,488',
+  '253,272 280,347 421,437 463,475 481,488',
+  '253,266 279,346 422,437 459,475 482,488',
+  '164,165 254,263 276,345 423,438 458,472 483,488',
+  '163,166 254,261 274,345 424,438 458,469 484,487',
+  '163,167 173,175 273,344 425,438 458,469',
+  '163,176 272,344 425,439 458,468',
+  '164,176 271,344 426,439 459,468',
+  '165,176 271,344 427,437 460,468',
+  '166,176 270,344 461,467',
+  '167,176 269,344 462,466',
+  '167,176 268,344',
+  '168,176 267,344',
+  '169,176 267,345',
+  '170,175 267,345',
+  '172,174 268,346',
+  '268,346',
+  '268,346',
+  '268,346 568,569',
+  '268,345 566,571',
+  '268,345 565,571',
+  '268,344 565,571',
+  '20,24 268,343 565,571',
+  '2,3 18,25 269,342 564,571',
+  '0,6 17,26 270,339 564,571',
+  '0,7 16,26 271,294 298,312 318,336 565,570',
+  '0,7 15,27 272,292 298,312 320,335 567,569',
+  '0,7 15,27 273,291 297,311 329,334',
+  '0,7 14,28 274,290 297,310 693,695',
+  '0,7 13,28 44,46 275,288 296,310 691,696',
+  '0,8 10,28 43,47 277,287 295,310 541,545 690,697',
+  '0,28 42,47 279,285 294,311 540,547 686,697',
+  '0,28 41,47 282,283 294,311 540,548 684,697',
+  '0,29 40,46 294,311 540,548 654,656 684,698',
+  '0,29 39,46 51,55 294,310 540,549 651,657 684,698 717,719',
+  '0,29 38,45 50,57 294,309 529,534 540,549 650,657 684,698 716,719',
+  '0,29 38,45 49,59 271,273 295,303 528,550 650,657 685,698 715,719',
+  '0,30 37,44 49,60 270,275 297,300 528,566 650,657 686,697 713,719',
+  '0,30 37,44 49,61 270,276 528,568 650,657 686,697 712,719',
+  '0,30 37,44 50,61 270,277 528,569 650,657 687,696 710,719',
+  '0,30 37,44 50,61 271,277 529,569 651,656 687,696 709,719',
+  '0,30 37,44 50,61 271,277 530,569 652,655 688,696 709,719',
+  '0,30 37,44 50,62 273,276 530,562 688,695 709,719',
+  '0,13 16,29 37,44 50,62 532,562 689,695 710,719',
+  '0,10 17,29 37,44 50,62 520,521 532,561 690,695 710,719',
+  '0,6 18,29 38,45 49,63 519,526 532,562 691,695 711,719',
+  '0,4 18,29 38,63 65,69 518,527 532,562 691,695 712,719',
+  '0,3 19,29 38,70 518,528 531,563 689,695 713,719',
+  '0,1 19,29 38,70 518,563 688,695 714,719',
+  '19,29 38,69 518,565 687,695 717,719',
+  '20,30 38,68 518,566 569,570 686,695',
+  '20,30 38,67 518,566 569,572 685,695',
+  '20,31 37,67 518,526 531,554 557,572 684,693',
+  '20,32 37,67 512,516 518,524 531,553 558,573 683,693',
+  '19,32 37,68 510,516 518,518 532,553 559,572 682,692',
+  '19,32 37,70 509,516 532,554 561,566 682,691 709,709',
+  '18,33 37,71 509,516 533,554 564,565 682,691 706,712',
+  '17,73 508,515 535,554 564,564 682,691 705,714',
+  '17,75 508,515 535,554 564,564 682,691 705,715',
+  '16,77 508,515 537,555 562,564 682,691 705,715',
+  '16,78 508,515 542,555 562,562 682,690 704,714',
+  '15,79 507,515 526,527 547,555 683,689 703,713',
+  '14,83 507,514 525,528 548,555 684,689 703,712',
+  '13,85 506,514 525,530 550,555 686,687 702,711',
+  '13,75 77,85 505,514 524,535 551,555 702,711',
+  '14,75 77,86 504,515 523,535 552,555 702,711',
+  '14,87 504,515 523,535 554,555 702,711',
+  '15,88 503,516 522,536 702,712',
+  '19,89 503,518 521,536 702,712',
+  '20,90 503,519 521,536 702,712',
+  '20,90 503,519 522,535 702,711',
+  '21,90 503,519 523,535 702,711',
+  '22,90 503,519 525,533 703,711',
+  '23,30 33,90 503,519 526,530 703,711',
+  '24,29 34,90 502,520 704,712',
+  '24,28 34,90 503,520 704,712',
+  '6,12 24,27 35,90 503,520 705,712',
+  '4,12 23,27 35,74 81,89 504,519 706,711',
+  '4,12 22,28 35,74 84,87 506,518 689,692',
+  '4,12 21,29 36,74 508,517 686,699',
+  '4,11 20,29 36,74 509,516 681,701',
+  '5,9 19,29 37,76 510,514 679,702',
+  '19,29 38,76 679,701',
+  '18,27 39,76 679,701',
+  '18,25 40,73 679,699',
+  '19,23 42,72 679,689 695,697',
+  '44,64 66,66 680,688',
+  '46,61 682,686',
+  '50,57',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
+  '',
 ]
 
-// Craters that stand out: [lat, lon, radius in degrees, how bright (dark below
-// 1), how far their rays reach in degrees].
+// The seas' tones where they differ, as patches: each one's middle in
+// degrees, its half-widths in degrees of arc across and up, and its tone:
+// above 1 darker and bluer, below it lighter and browner.
+const TONES: readonly (readonly [number, number, number, number, number])[] = [
+  [8, 31, 11, 9, 1.08], // Tranquillitatis, the darkest and bluest
+  [28, 17.5, 6, 6, 0.9], // Serenitatis, light in its middle
+  [24, -50, 8, 8, 1.06], // Procellarum about Aristarchus
+  [-6, 52, 7, 9, 0.94], // Fecunditatis
+  [56, 0, 30, 4, 0.92], // Frigoris
+]
+
+// Craters with names: [lat, lon, radius in degrees, how bright (dark below
+// 1, as where lava filled them), how far their rays reach in degrees].
 const CRATERS: readonly (readonly [number, number, number, number, number])[] = [
-  [-43.3, -11.2, 1.4, 1.5, 55], // Tycho
-  [9.6, -20.1, 1.6, 1.4, 18], // Copernicus
-  [8.1, -38, 0.9, 1.4, 12], // Kepler
-  [23.7, -47.4, 0.7, 1.7, 8], // Aristarchus
-  [16.1, 46.8, 0.6, 1.4, 10], // Proclus
-  [51.6, -9.4, 1.7, 0.6, 0], // Plato
-  [-5.2, -68.6, 2.8, 0.62, 0], // Grimaldi
-  [-8.9, 61.1, 2.2, 1.12, 0], // Langrenus
-  [-25.3, 60.4, 3, 1.1, 0], // Petavius
-  [-20.4, 129.1, 2, 0.6, 0], // Tsiolkovsky, on the far side
+  [-43.3, -11.2, 1.4, 1.3, 55], // Tycho
+  [9.6, -20.1, 1.6, 1.22, 18], // Copernicus
+  [8.1, -38, 0.9, 1.22, 12], // Kepler
+  [23.7, -47.4, 0.7, 1.4, 8], // Aristarchus
+  [16.1, 46.8, 0.6, 1.2, 10], // Proclus
+  [51.6, -9.4, 1.7, 0.66, 0], // Plato
+  [-5.2, -68.6, 2.8, 0.68, 0], // Grimaldi
+  [-20.4, 129.1, 2, 0.66, 0], // Tsiolkovsky, on the far side
+  [-8.9, 61.1, 2.2, 1, 0], // Langrenus
+  [-25.3, 60.4, 3, 1, 0], // Petavius
+  [-58.4, -14.4, 3.7, 1, 0], // Clavius
+  [-9.3, -1.9, 2.6, 1, 0], // Ptolemaeus
+  [-13.4, -2.8, 1.8, 1, 0], // Alphonsus
+  [-18.2, -1.9, 1.6, 1, 0], // Arzachel
+  [-11.4, 26.4, 1.65, 1, 0], // Theophilus
+  [-13.2, 24, 1.6, 1, 0], // Cyrillus
+  [-18, 23.6, 1.6, 1, 0], // Catharina
+  [-50, -6.2, 2.7, 1, 0], // Maginus
+  [-49.6, -21.7, 2.4, 1, 0], // Longomontanus
+  [-44.4, -54.6, 3.7, 1, 0], // Schickard
+  [-17.6, -40.1, 1.8, 1, 0], // Gassendi
+  [29.7, -4, 1.4, 0.9, 0], // Archimedes
+  [50.2, 17.4, 1.5, 1, 0], // Aristoteles
+  [14.5, -11.3, 1, 1, 0], // Eratosthenes
+  [-5.1, 5.2, 2.5, 1, 0], // Hipparchus
+  [-11.2, 4.1, 2.2, 1, 0], // Albategnius
+  [31.9, 29.9, 1.6, 1, 0], // Posidonius
+  [27.6, 56, 2, 1, 0], // Cleomedes
 ]
 
-// The Moon's face `width` texels round: bright highlands, the dark seas,
-// small craters everywhere, and the bright ones with their rays.
+// The Moon's face `width` texels round: evenly bright highlands, the seas
+// dark where they lie, the bright young craters with their rays
+// and the old ones flooded dark, and craters everywhere pressed in as slopes
+// (Chart.bumps) for the sun to catch: deep bowls the small ones, shallow
+// with flat floors and peaks the big ones; few on the seas, which are younger.
 export function moonChart(width: number): Chart {
   const key = `moon:${width}`
   const known = charts.get(key)
@@ -242,17 +611,98 @@ export function moonChart(width: number): Chart {
 
   const height = Math.max(2, width >> 1)
   const colors = new Uint32Array(width * height)
+  const seas = new Float32Array(width * height)
   const rays = raysOf()
   for (let y = 0; y < height; y++) {
     const lat = 90 - ((y + 0.5) / height) * 180
     for (let x = 0; x < width; x++) {
       const lon = ((x + 0.5) / width) * 360 - 180
-      colors[y * width + x] = moonTexel(lat, lon, rays)
+      const i = y * width + x
+      const [sea, tone] = seaAt(lat, lon)
+      seas[i] = sea
+      colors[i] = moonTexel(lat, lon, rays, sea, tone)
     }
   }
-  const made = { width, height, colors }
+  const bumps = new Float32Array(width * height * 2)
+  for (const crater of cratersOf(width, seas)) press(crater, colors, bumps, width, height)
+  const made = { width, height, colors, bumps }
   charts.set(key, made)
   return made
+}
+
+// A crater: its middle and radius in degrees; how steep its walls; the
+// share of its radius that is flat floor, and that is central peak; how
+// much its rim shines, fresh.
+type Crater = { lat: number; lon: number; r: number; steep: number; floor: number; peak: number; shine: number }
+
+// How a crater `r` degrees across its radius is shaped, `fresh` 0 to 1:
+// small ones simple bowls, steep; bigger ones with flat floors and peaks in
+// the middle, shallower; worn ones shallower still.
+function shapeOf(r: number, fresh: number): Pick<Crater, 'steep' | 'floor' | 'peak'> {
+  const worn = 0.55 + 0.45 * fresh
+  if (r < 0.5) return { steep: (0.65 + 0.15 * fresh) * worn, floor: 0, peak: 0 }
+  if (r < 1.5) return { steep: (0.45 + 0.15 * fresh) * worn, floor: 0.3, peak: r > 0.8 ? 0.12 : 0 }
+  return { steep: (r > 3 ? 0.18 : 0.3) * worn, floor: 0.5, peak: 0.14 }
+}
+
+// The craters a face `width` texels round can show: the named ones, then
+// thirteen hundred more, small ones many and big ones few, each at least two
+// texels across; on the seas most of them never formed.
+function cratersOf(width: number, seas: Float32Array): Crater[] {
+  const height = Math.max(2, width >> 1)
+  const texel = 360 / width
+  const next = random(SEED + 21)
+  const named = CRATERS.map(([lat, lon, r, bright]) => ({ lat, lon, r, ...shapeOf(r, bright > 1.1 ? 1 : 0.6), shine: 0 }))
+  const scattered = Array.from({ length: 1300 }, () => {
+    const lat = (Math.asin(2 * next() - 1) * 180) / Math.PI
+    const lon = next() * 360 - 180
+    const r = 0.3 + 4.2 * next() ** 6
+    const fresh = next() ** 2
+    return { lat, lon, r, ...shapeOf(r, fresh), shine: r < 1 ? fresh : 0 }
+  }).filter(crater => {
+    const x = Math.min(width - 1, Math.floor(((crater.lon + 180) / 360) * width))
+    const y = Math.min(height - 1, Math.floor(((90 - crater.lat) / 180) * height))
+    return crater.r > 1.1 * texel && ((seas[y * width + x] ?? 0) < 0.5 || next() < 0.25)
+  })
+  return [...scattered, ...named]
+}
+
+// Presses a crater into a face as slopes east and north in `bumps`: the
+// peak falling away from its top, the floor flat, the walls rising to the
+// rim, the rim falling away outside it. Only a fresh one's rim is brighter;
+// its floor keeps the ground's own color, darkened only by the light.
+function press(crater: Crater, colors: Uint32Array, bumps: Float32Array, width: number, height: number) {
+  const reach = crater.r * 1.7
+  const texel = 360 / width
+  const top = Math.max(0, Math.floor(((90 - (crater.lat + reach)) / 180) * height))
+  const bottom = Math.min(height - 1, Math.ceil(((90 - (crater.lat - reach)) / 180) * height))
+  const across = Math.min(180, reach / Math.max(0.05, Math.cos(rad(crater.lat))))
+  const first = Math.floor(((crater.lon - across + 180) / 360) * width)
+  const count = Math.min(width, Math.ceil((2 * across) / texel) + 2)
+  const { steep, floor, peak } = crater
+  for (let y = top; y <= bottom; y++) {
+    const lat = 90 - ((y + 0.5) / height) * 180
+    for (let k = 0; k < count; k++) {
+      const x = (((first + k) % width) + width) % width
+      const lon = ((x + 0.5) / width) * 360 - 180
+      const [east, north] = [apart(lon, crater.lon) * Math.cos(rad(lat)), lat - crater.lat]
+      const far = Math.hypot(east, north)
+      const d = far / crater.r
+      if (d > 1.7 || far === 0) continue
+      const slope =
+        d < peak
+          ? -steep * 1.6 * Math.sin((Math.PI * d) / peak)
+          : d < floor
+            ? 0
+            : d < 1
+              ? (steep * (d - floor)) / (1 - floor)
+              : -steep * 0.85 * (1 - (d - 1) / 0.7) ** 2
+      const i = y * width + x
+      bumps[2 * i] = (bumps[2 * i] ?? 0) + (slope * east) / far
+      bumps[2 * i + 1] = (bumps[2 * i + 1] ?? 0) + (slope * north) / far
+      if (crater.shine > 0 && d > 0.85 && d < 1.3) colors[i] = mix(colors[i] ?? 0, 0xdedad2, 0.22 * crater.shine)
+    }
+  }
 }
 
 // The angle from `lon` to `to` in degrees, the short way round.
@@ -276,33 +726,69 @@ function raysOf(): Rays[] {
   return raySets
 }
 
-function moonTexel(lat: number, lon: number, rays: readonly Rays[]): number {
-  const [x, y, z] = [Math.cos(rad(lat)) * Math.sin(rad(lon)), Math.sin(rad(lat)), Math.cos(rad(lat)) * Math.cos(rad(lon))]
-  const ground = fbm3(x * 3, y * 3, z * 3, SEED + 5, 4)
-  let color = mix(0xbab6ae, 0x9c988f, smooth(0.35, 0.65, ground))
+let mariaMask: Float32Array | undefined
 
-  // The seas, their edges wavering.
-  let sea = 0
-  // Each place is moved a few degrees by a noise first, so the seas' shores wander.
-  const [wLat, wLon] = [lat + 9 * (fbm3(x * 4, y * 4, z * 4, SEED + 11, 3) - 0.5), lon + 9 * (fbm3(x * 4, y * 4, z * 4, SEED + 12, 3) - 0.5)]
-  const ragged = 1.2 * (fbm3(x * 9, y * 9, z * 9, SEED + 6, 3) - 0.5)
-  for (const [mLat, mLon, across, up] of SEAS) {
-    const dx = (apart(wLon, mLon) * Math.cos(rad(lat))) / across
-    const dy = (wLat - mLat) / up
-    sea = Math.max(sea, smooth(1.1, 0.85, Math.hypot(dx, dy) / 1.1 + ragged))
+// The seas as a mask 720 by 360, softened over a degree so the shores are not stepped.
+function mariaOf(): Float32Array {
+  if (mariaMask) return mariaMask
+  const [W, H] = [720, 360]
+  let mask = new Float32Array(W * H)
+  MARIA.forEach((row, y) => {
+    for (const run of row === '' ? [] : row.split(' ')) {
+      const [from = 0, to = 0] = run.split(',').map(Number)
+      mask.fill(1, y * W + from, y * W + to + 1)
+    }
+  })
+  // A box blur two cells each way, across (round the Moon) then up and down.
+  for (const isAcross of [true, false]) {
+    const soft = new Float32Array(W * H)
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        let sum = 0
+        for (let k = -2; k <= 2; k++) sum += isAcross ? (mask[y * W + ((x + k + W) % W)] ?? 0) : (mask[Math.min(H - 1, Math.max(0, y + k)) * W + x] ?? 0)
+        soft[y * W + x] = sum / 5
+      }
+    }
+    mask = soft
   }
-  const tint = noise3(x * 4, y * 4, z * 4, SEED + 7)
-  color = mix(color, mix(0x67645f, 0x726b5e, tint), sea * 0.9)
+  mariaMask = mask
+  return mask
+}
 
-  // Small craters everywhere, rims bright and floors dark.
-  const pit = noise3(x * 60, y * 60, z * 60, SEED + 8)
-  if (pit > 0.74) color = shade(color, 0.86)
-  else if (pit > 0.7) color = shade(color, 1.12)
+// How much of (lat, lon) is sea, 0 to 1, and the tone of the sea there; each
+// place moved a fraction of a degree by a noise first, so the shores wander
+// finer than the mask is drawn.
+function seaAt(lat: number, lon: number): readonly [number, number] {
+  const [x, y, z] = [Math.cos(rad(lat)) * Math.sin(rad(lon)), Math.sin(rad(lat)), Math.cos(rad(lat)) * Math.cos(rad(lon))]
+  const [wLat, wLon] = [lat + 1.2 * (fbm3(x * 9, y * 9, z * 9, SEED + 11, 2) - 0.5), lon + 1.2 * (fbm3(x * 9, y * 9, z * 9, SEED + 12, 2) - 0.5)]
+  // The mask read between its cells.
+  const mask = mariaOf()
+  const [u, v] = [(((wLon + 180) % 360) + 360) % 360 * 2 - 0.5, Math.min(359, Math.max(0, (90 - wLat) * 2 - 0.5))]
+  const [x0, y0] = [Math.floor(u), Math.floor(v)]
+  const [fx, fy] = [u - x0, v - y0]
+  const at = (cx: number, cy: number) => mask[Math.min(359, cy) * 720 + (((cx % 720) + 720) % 720)] ?? 0
+  const value = (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) + (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy
+  let tone = 1
+  for (const [mLat, mLon, across, up, patch] of TONES) {
+    const d = Math.hypot((apart(lon, mLon) * Math.cos(rad(lat))) / across, (lat - mLat) / up)
+    tone += (patch - 1) * smooth(1.2, 0.6, d)
+  }
+  return [smooth(0.3, 0.7, value), tone]
+}
+
+function moonTexel(lat: number, lon: number, rays: readonly Rays[], sea: number, tone: number): number {
+  const [x, y, z] = [Math.cos(rad(lat)) * Math.sin(rad(lon)), Math.sin(rad(lat)), Math.cos(rad(lat)) * Math.cos(rad(lon))]
+  // The highlands evenly bright, barely mottled.
+  let color = mix(0xc4c0b8, 0xb6b2aa, smooth(0.3, 0.7, fbm3(x * 2, y * 2, z * 2, SEED + 5, 3)))
+  // The seas' basalt: darker and bluer where the tone is up, a slow sway within.
+  const basalt = shade(mix(0x7c776f, 0x707278, smooth(0.98, 1.1, tone)), (2 - tone) * (0.95 + 0.1 * noise3(x * 5, y * 5, z * 5, SEED + 7)))
+  color = mix(color, basalt, sea * 0.9)
 
   for (const [cLat, cLon, radius, bright] of CRATERS) {
+    if (bright === 1) continue
     const d = Math.hypot(apart(lon, cLon) * Math.cos(rad(lat)), lat - cLat) / radius
-    if (d < 1) color = bright < 1 ? shade(color, bright) : mix(color, 0xf2f0ea, (bright - 1) * 1.6 * (1 - d * 0.4))
-    else if (d < 2.2 && bright > 1) color = mix(color, 0xe8e6e0, (bright - 1) * smooth(2.2, 1, d))
+    if (bright < 1 && d < 0.85) color = shade(color, bright + (1 - bright) * smooth(0.6, 0.85, d))
+    else if (bright > 1 && d < 2) color = mix(color, 0xe8e6e0, (bright - 1) * 1.5 * smooth(2, 0.8, d))
   }
 
   for (const set of rays) {
@@ -314,7 +800,7 @@ function moonTexel(lat: number, lon: number, rays: readonly Rays[]): number {
     const bearing = Math.atan2(Math.sin(dLon) * Math.cos(pLat), Math.cos(cLat) * Math.sin(pLat) - Math.sin(cLat) * Math.cos(pLat) * Math.cos(dLon))
     for (const ray of set.rays) {
       const off = Math.abs(Math.sin(bearing - ray.bearing)) * far
-      if (far < ray.reach && Math.cos(bearing - ray.bearing) > 0 && off < 1.2) color = mix(color, 0xe6e4de, 0.45 * ray.bright * (1 - off / 1.2) * (1 - far / ray.reach))
+      if (far < ray.reach && Math.cos(bearing - ray.bearing) > 0 && off < 1.2) color = mix(color, 0xe6e4de, 0.35 * ray.bright * (1 - off / 1.2) * (1 - far / ray.reach))
     }
   }
 

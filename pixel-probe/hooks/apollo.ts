@@ -1,3 +1,4 @@
+import type { View as TurnedView } from '../types'
 import { earthChart, moonChart } from './earth'
 import { fbm2, hash3, random } from './noise'
 import { blend, dither, glow, mix, put, shade } from './pixels'
@@ -105,32 +106,38 @@ const SUN_ON_THE_MOON = toward(rad(1.5), rad(102.7))
 const PAD = [rad(28.61), rad(-80.6)] as const
 const TRANQUILITY = toward(rad(0.674), rad(23.473))
 
-// A body turned to the eye with (lat, lon) facing it, north up: `toBody`
-// takes a way seen from the eye (x right, y up, z toward the eye) into the
-// body's own frame, `fromBody` takes it back.
+// A body turned to the eye with (lat, lon) facing it, north up, or turned
+// `roll` round counterclockwise: `toBody` takes a way seen from the eye (x
+// right, y up, z toward the eye) into the body's own frame, `fromBody` takes it back.
 type Facing = { toBody: (v: Vec) => Vec; fromBody: (v: Vec) => Vec }
 
-function facing(lat: number, lon: number): Facing {
+function facing(lat: number, lon: number, roll = 0): Facing {
   const [cl, sl, co, so] = [Math.cos(lat), Math.sin(lat), Math.cos(lon), Math.sin(lon)]
+  const [cr, sr] = [Math.cos(roll), Math.sin(roll)]
   return {
-    toBody: ([x, y, z]) => {
+    toBody: ([x0, y0, z]) => {
+      const [x, y] = [x0 * cr + y0 * sr, -x0 * sr + y0 * cr]
       const [y1, z1] = [y * cl + z * sl, -y * sl + z * cl]
       return [x * co + z1 * so, y1, -x * so + z1 * co]
     },
     fromBody: ([x, y, z]) => {
       const [x1, z1] = [x * co - z * so, x * so + z * co]
-      return [x1, y * cl - z1 * sl, y * sl + z1 * cl]
+      const [y2, z2] = [y * cl - z1 * sl, y * sl + z1 * cl]
+      return [x1 * cr - y2 * sr, x1 * sr + y2 * cr, z2]
     },
   }
 }
 
-// A face looked up by latitude and longitude, nearest texel, as scene.ts does.
-function look(chart: Chart, lat: number, lon: number, isCloud = false): number {
+// The texel of a face at a latitude and longitude, the nearest, as scene.ts finds it.
+function texelOf(chart: Chart, lat: number, lon: number): number {
   const u = (((lon + Math.PI) / (2 * Math.PI)) % 1 + 1) % 1
   const x = Math.min(chart.width - 1, Math.floor(u * chart.width))
   const y = clamp(Math.floor(((Math.PI / 2 - lat) / Math.PI) * chart.height), 0, chart.height - 1)
-  return (isCloud ? chart.clouds?.[y * chart.width + x] : chart.colors[y * chart.width + x]) ?? 0
+  return y * chart.width + x
 }
+
+const look = (chart: Chart, lat: number, lon: number, isCloud = false): number =>
+  (isCloud ? chart.clouds?.[texelOf(chart, lat, lon)] : chart.colors[texelOf(chart, lat, lon)]) ?? 0
 
 // How many texels round a face drawn `radius` pixels across: about one a
 // pixel at the middle, a power of two, no more than 512.
@@ -144,6 +151,8 @@ type Disc = { x: number; y: number; r: number; z: number }
 // `gamma` below 1 for the Moon's bright dust, which stays bright as the sun gets low.
 function drawBall(c: Canvas, chart: Chart, at: Disc, turn: Facing, light: Vec, levels: number, night: number, air?: number, gamma = 1) {
   const { x: cx, y: cy, r: R, z } = at
+  const sun = turn.toBody(light)
+  const { bumps } = chart
   for (let py = Math.max(0, Math.floor(cy - R)); py <= Math.min(c.height - 1, Math.ceil(cy + R)); py++) {
     for (let px = Math.max(0, Math.floor(cx - R)); px <= Math.min(c.width - 1, Math.ceil(cx + R)); px++) {
       const dx = (px + 0.5 - cx) / R
@@ -159,7 +168,16 @@ function drawBall(c: Canvas, chart: Chart, at: Disc, turn: Facing, light: Vec, l
       let color = look(chart, lat, lon)
       if (chart.clouds) color = mix(color, 0xf4f6fa, look(chart, lat, lon, true))
       if (air !== undefined) color = mix(color, 0x7fb4ff, (1 - nz) ** 2 * air)
-      const lit = Math.max(0, dot(normal, light)) ** gamma
+      let facingSun = dot(normal, light)
+      if (bumps) {
+        // The ground tipped by its slopes, east and north, before the sun is let fall on it.
+        const i = texelOf(chart, lat, lon)
+        const [east, north] = [bumps[2 * i] ?? 0, bumps[2 * i + 1] ?? 0]
+        const [sl, cl, so, co] = [Math.sin(lat), Math.cos(lat), Math.sin(lon), Math.cos(lon)]
+        const tipped: Vec = [bx - east * co + north * sl * so, by - north * cl, bz + east * so + north * sl * co]
+        facingSun = dot(tipped, sun) / Math.hypot(tipped[0], tipped[1], tipped[2])
+      }
+      const lit = Math.max(0, facingSun) ** gamma
       const stepped = Math.min(1, Math.floor(lit * levels + dither(px, py)) / levels)
       put(c, px, py, shade(color, night + (1 - night) * stepped), z + nz * R)
     }
@@ -403,8 +421,10 @@ function shotOf(m: Mission): Shot {
   return { kind: 'coast', at: m.flown }
 }
 
-// The mission's picture, over the sky scene.ts has drawn.
-export function drawApollo(c: Canvas, m: Mission, time: number, levels: number) {
+// The mission's picture, over the sky scene.ts has drawn; `view`, the
+// person's drag and wheel on the dashboard, turns the eye on the Moon once
+// the flag is up.
+export function drawApollo(c: Canvas, m: Mission, time: number, levels: number, view?: TurnedView) {
   const shot = shotOf(m)
   switch (shot.kind) {
     case 'earth':
@@ -418,7 +438,7 @@ export function drawApollo(c: Canvas, m: Mission, time: number, levels: number) 
     case 'descent':
       return descentShot(c, shot.t, time, levels)
     case 'surface':
-      return surfaceShot(c, shot.land, shot.step, m.onTheMoon, time)
+      return surfaceShot(c, shot.land, shot.step, m.onTheMoon, time, levels, shot.step !== undefined && shot.step >= EVA ? lookOf(view) : undefined)
   }
 }
 
@@ -815,29 +835,66 @@ const FLAG_D = 15.5
 // Shadows are this many times longer than what casts them, the sun 10.8° up.
 const LONG = 1 / Math.tan(rad(10.8))
 
-type View = { W: number; H: number; f: number; horizon: number; middle: number }
+// The eye on the Moon: `f` pixels a radian, its middle at (cx, cy) on
+// screen, and its right, up and forward ways, from where it looks: its
+// heading round from north toward east, and its pitch up from level.
+type View = { W: number; H: number; f: number; cx: number; cy: number; right: Vec; up: Vec; forward: Vec }
 
-const viewOf = (c: Canvas, isClose: boolean): View => {
+// Where the person has turned the eye and how near it looks: dragging
+// across turns it (right turns it west, as if the ground were grabbed),
+// dragging down looks up, the wheel zooms.
+type Look = { heading: number; pitch: number; zoom: number }
+
+const lookOf = (view: TurnedView | undefined): Look | undefined =>
+  view === undefined ? undefined : { heading: -view.spin, pitch: clamp(view.tip * 1.25, -0.6, 1.15), zoom: view.zoom }
+
+const viewOf = (c: Canvas, isClose: boolean, look?: Look): View => {
   const unit = Math.min(c.width, c.height)
-  if (!isClose) return { W: c.width, H: c.height, f: 0.95 * unit, horizon: Math.round(0.43 * c.height), middle: 0.5 * c.width }
-  // Nearer, the flag a little left of the middle.
-  const f = 1.9 * unit
-  return { W: c.width, H: c.height, f, horizon: Math.round(0.43 * c.height), middle: 0.4 * c.width - (FLAG_X * f) / FLAG_D }
+  const near = isClose ? 1.9 * unit : 0.95 * unit
+  const f = near * (look?.zoom ?? 1)
+  // Close in, the flag a little left of the middle.
+  const cx = isClose ? 0.4 * c.width - (FLAG_X * near) / FLAG_D : 0.5 * c.width
+  const [h, p] = [look?.heading ?? 0, look?.pitch ?? 0]
+  return {
+    W: c.width,
+    H: c.height,
+    f,
+    cx,
+    cy: Math.round(0.43 * c.height),
+    right: [Math.cos(h), 0, -Math.sin(h)],
+    up: [-Math.sin(h) * Math.sin(p), Math.cos(p), -Math.cos(h) * Math.sin(p)],
+    forward: [Math.sin(h) * Math.cos(p), Math.sin(p), Math.cos(h) * Math.cos(p)],
+  }
 }
 
 // The moonwalk cuts in close as the flag goes in.
 const CLOSE = 9
 
-// Where (east, up, north) meters land on screen, and how near.
-const project = (v: View, x: number, y: number, d: number) => [v.middle + (x * v.f) / d, v.horizon + ((EYE - y) * v.f) / d, -d] as const
+// How far ahead of the eye (east, up, north) meters are.
+const ahead = (v: View, x: number, y: number, d: number) => dot([x, y - EYE, d], v.forward)
 
-// The ground as seen, made once for each size: grey dust, darker patches,
+// Where (east, up, north) meters land on screen, and how near; nowhere
+// (NaN) behind the eye.
+const project = (v: View, x: number, y: number, d: number) => {
+  const q: Vec = [x, y - EYE, d]
+  const far = dot(q, v.forward)
+  if (far < 0.3) return [NaN, NaN, -Infinity] as const
+  return [v.cx + (v.f * dot(q, v.right)) / far, v.cy - (v.f * dot(q, v.up)) / far, -far] as const
+}
+
+// The ground as seen, made once for each way the eye looks: each pixel's
+// line of sight followed down to the ground, out to the horizon 2.4 km off
+// where the Moon curves away, and there grey dust, darker patches, and
 // craters lit on their western walls and dark on their eastern, the sun
-// being in the east.
-const grounds = new Map<string, Uint32Array>()
+// being in the east. Where on the ground each pixel lands is kept for the
+// shadows; NaN where it sees sky.
+type Ground = { colors: Uint32Array; east: Float32Array; north: Float32Array }
 
-function groundOf(c: Canvas, v: View): Uint32Array {
-  const key = `${c.width}x${c.height}:${v.f}:${v.middle}`
+const grounds = new Map<string, Ground>()
+const HORIZON = 2400
+
+function groundOf(c: Canvas, v: View): Ground {
+  const key = `${c.width}x${c.height}:${v.f}:${v.cx}:${v.forward.join()}`
   const known = grounds.get(key)
   if (known) return known
   if (grounds.size > 6) grounds.clear()
@@ -847,11 +904,18 @@ function groundOf(c: Canvas, v: View): Uint32Array {
     const d = 6 + 220 * next() ** 2
     return { x: (next() * 2 - 1) * d * 0.9, d, r: 0.3 + (0.6 + 0.04 * d) * next() ** 2 }
   })
-  const made = new Uint32Array(c.width * c.height)
-  for (let py = v.horizon; py < c.height; py++) {
-    const d = (EYE * v.f) / (py + 0.5 - v.horizon)
+  const made = { colors: new Uint32Array(c.width * c.height), east: new Float32Array(c.width * c.height).fill(NaN), north: new Float32Array(c.width * c.height).fill(NaN) }
+  for (let py = 0; py < c.height; py++) {
     for (let px = 0; px < c.width; px++) {
-      const x = ((px + 0.5 - v.middle) * d) / v.f
+      const [across, down] = [(px + 0.5 - v.cx) / v.f, (py + 0.5 - v.cy) / v.f]
+      const sight = plus(plus(v.forward, v.right, across), v.up, -down)
+      if (sight[1] >= 0) continue
+      const reach = EYE / -sight[1]
+      if (reach > HORIZON) continue
+      const [x, d] = [reach * sight[0], reach * sight[2]]
+      const i = py * c.width + px
+      made.east[i] = x
+      made.north[i] = d
       let light = 0.84 + 0.26 * (fbm2(x * 0.25, d * 0.25, 1969, 3) - 0.5) + 0.12 * (hash3(px, py, 0, 11) - 0.5)
       for (const crater of craters) {
         const [dx, dd] = [(x - crater.x) / crater.r, (d - crater.d) / crater.r]
@@ -859,7 +923,7 @@ function groundOf(c: Canvas, v: View): Uint32Array {
         if (r2 > 1.4) continue
         light *= r2 > 1 ? 1.06 : dx > 0.2 ? 0.55 : dx < -0.3 ? 1.16 : 0.92
       }
-      made[py * c.width + px] = shade(0x938e86, light * (0.9 + 0.1 * Math.min(1, d / 60)))
+      made.colors[i] = shade(0x938e86, light * (0.9 + 0.1 * Math.min(1, reach / 60)))
     }
   }
   grounds.set(key, made)
@@ -868,25 +932,54 @@ function groundOf(c: Canvas, v: View): Uint32Array {
 
 // A shadow on the ground from something `tall` meters high standing at
 // (x, d), `wide` meters across it east to west and `deep` north to south:
-// out to the west, LONG times as long, thinning toward its end.
-function shadow(c: Canvas, v: View, x: number, d: number, tall: number, wide: number, deep: number) {
-  const tip = x - tall * LONG
-  for (let py = v.horizon + 1; py < c.height; py++) {
-    const at = (EYE * v.f) / (py + 0.5 - v.horizon)
-    if (Math.abs(at - d) > deep) continue
-    // Off its middle line the shadow ends sooner: it narrows to a point.
-    const thin = 1 - Math.abs(at - d) / deep
-    const left = Math.floor(v.middle + ((x - (x - tip) * thin) * v.f) / at)
-    const right = Math.ceil(v.middle + ((x + wide * 0.5) * v.f) / at)
-    for (let px = Math.max(0, left); px <= Math.min(c.width - 1, right); px++) {
-      const i = py * c.width + px
-      c.color[i] = shade(c.color[i] ?? 0, 0.45)
-    }
-  }
+// out to the west, LONG times as long, narrowing to a point.
+type Shadow = { x: number; d: number; tall: number; wide: number; deep: number }
+
+const isShaded = (s: Shadow, x: number, d: number) => {
+  const off = Math.abs(d - s.d)
+  return off <= s.deep && x <= s.x + s.wide * 0.5 && x >= s.x - s.tall * LONG * (1 - off / s.deep)
+}
+
+// The stars on the sky's sphere, the same every time: a way and a brightness each.
+let skyStars: { way: Vec; bright: number }[] | undefined
+
+function starsOf() {
+  if (skyStars) return skyStars
+  const next = random(1969_07_20)
+  skyStars = Array.from({ length: 1400 }, () => {
+    const [y, turn] = [next() * 1.02 - 0.02, next() * 2 * Math.PI]
+    const across = Math.sqrt(Math.max(0, 1 - y * y))
+    return { way: [across * Math.cos(turn), y, across * Math.sin(turn)] as Vec, bright: 0.25 + 0.75 * next() ** 3 }
+  })
+  return skyStars
+}
+
+// Earth from Tranquility Base: 66.5° up, just south of west, 1.9° across;
+// lit on its side toward the sun, low in the east, so a little more than
+// half lit; the Atlantic toward the Moon, the Americas on its sunlit edge.
+const EARTH_WAY = unit3([-0.398, 0.917, -0.0107])
+const EARTH_ANGLE = Math.asin(6371 / 384_400)
+const SUN_WAY: Vec = [Math.cos(rad(10.8)), Math.sin(rad(10.8)), 0]
+
+function drawEarthAbove(c: Canvas, v: View, levels: number) {
+  const far = dot(EARTH_WAY, v.forward)
+  if (far < 0.1) return
+  const x = v.cx + (v.f * dot(EARTH_WAY, v.right)) / far
+  const y = v.cy - (v.f * dot(EARTH_WAY, v.up)) / far
+  const r = Math.max(1.2, (v.f * EARTH_ANGLE) / far)
+  if (x + r < 0 || x - r > c.width || y + r < 0 || y - r > c.height) return
+  // Earth's north where the Moon's north falls on the screen.
+  const north: Vec = [0, 0, 1]
+  const roll = Math.atan2(dot(north, v.up), dot(north, v.right)) - Math.PI / 2
+  const light = unit3([dot(SUN_WAY, v.right), dot(SUN_WAY, v.up), -dot(SUN_WAY, EARTH_WAY)])
+  const at = { x, y, r, z: -1e8 }
+  drawBall(c, earthChart(chartWidth(r)), at, facing(rad(-5), rad(-44), roll), light, levels, 0.03, 0.45)
+  if (r > 3) drawAir(c, at, light)
 }
 
 // A filled polygon of screen points at nearness `z`, its color by pixel.
 function polygon(c: Canvas, points: readonly (readonly [number, number])[], z: number, color: (px: number, py: number) => number) {
+  if (points.some(([x, y]) => Number.isNaN(x) || Number.isNaN(y))) return
   const ys = points.map(([, y]) => y)
   for (let py = Math.max(0, Math.floor(Math.min(...ys))); py <= Math.min(c.height - 1, Math.ceil(Math.max(...ys))); py++) {
     const y = py + 0.5
@@ -905,10 +998,27 @@ function polygon(c: Canvas, points: readonly (readonly [number, number])[], z: n
 
 // A line `width` pixels thick from a to b.
 function line(c: Canvas, a: readonly [number, number], b: readonly [number, number], width: number, color: number, z: number) {
-  const steps = Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) * 2) + 1
+  if ([a[0], a[1], b[0], b[1]].some(Number.isNaN)) return
+  // Only the part on the picture, give or take the line's width: something
+  // just before the eye can reach thousands of pixels off it.
+  const [dx, dy] = [b[0] - a[0], b[1] - a[1]]
+  let [from, to] = [0, 1]
+  for (const [p, q] of [[-dx, a[0] + width], [dx, c.width + width - a[0]], [-dy, a[1] + width], [dy, c.height + width - a[1]]] as const) {
+    if (p === 0) {
+      if (q < 0) return
+      continue
+    }
+    const k = q / p
+    if (p < 0) from = Math.max(from, k)
+    else to = Math.min(to, k)
+    if (from > to) return
+  }
+  const [sx, sy] = [a[0] + dx * from, a[1] + dy * from]
+  const [ex, ey] = [a[0] + dx * to, a[1] + dy * to]
+  const steps = Math.ceil(Math.hypot(ex - sx, ey - sy) * 2) + 1
   const half = width / 2
   for (let s = 0; s <= steps; s++) {
-    const [x, y] = [a[0] + ((b[0] - a[0]) * s) / steps, a[1] + ((b[1] - a[1]) * s) / steps]
+    const [x, y] = [sx + ((ex - sx) * s) / steps, sy + ((ey - sy) * s) / steps]
     for (let py = Math.floor(y - half + 0.5); py <= Math.floor(y + half - 0.5 + 0.5); py++) {
       for (let px = Math.floor(x - half + 0.5); px <= Math.floor(x + half - 0.5 + 0.5); px++) put(c, px, py, color, z)
     }
@@ -926,7 +1036,7 @@ function drawEagle(c: Canvas, v: View, x: number, y: number, isOpen: boolean, is
     return [px, py] as const
   }
   const s = v.f / LM_D
-  const z = -LM_D
+  const z = -ahead(v, x, 3, LM_D)
   const strut = Math.max(1, 0.16 * s)
   // How the sun from the east falls across a part `from` to `to` meters east to west.
   const lightAt = (px: number, from: number, to: number) => 0.55 + 0.45 * clamp((px - p(from, 0)[0]) / Math.max(1, p(to, 0)[0] - p(from, 0)[0]), 0, 1)
@@ -1000,7 +1110,7 @@ type Gait = 'stand' | 'walk' | 'climb' | 'plant' | 'salute'
 // `way` (1 east, -1 west): white suit, the backpack behind, gold visor.
 function drawWalker(c: Canvas, v: View, x: number, y: number, d: number, way: number, gait: Gait, stride: number) {
   const s = v.f / d
-  const z = -d + 0.5
+  const z = -ahead(v, x, 1, d) + 0.5
   const p = (lx: number, ly: number) => {
     const [px, py] = project(v, x + lx * way, y + ly, d)
     return [px, py] as const
@@ -1051,7 +1161,7 @@ function drawWalker(c: Canvas, v: View, x: number, y: number, d: number, way: nu
 // `unfurled` of the way and the flag hanging from it, rippled.
 function drawFlag(c: Canvas, v: View, x: number, d: number, planted: number, unfurled: number) {
   const s = v.f / d
-  const z = -d + 0.4
+  const z = -ahead(v, x, 1, d) + 0.4
   const high = 0.35 * (1 - planted)
   const top = 2.25 + high
   const at = (east: number, up: number) => {
@@ -1063,8 +1173,8 @@ function drawFlag(c: Canvas, v: View, x: number, d: number, planted: number, unf
   line(c, at(x, top), at(x + wide, top), 1, 0xd8d4cc, z)
   const [left, upper] = project(v, x, top, d)
   const [right, lower] = project(v, x + wide, top - 0.91, d)
-  for (let py = Math.floor(upper) + 1; py <= Math.ceil(lower); py++) {
-    for (let px = Math.ceil(left); px <= Math.floor(right); px++) {
+  for (let py = Math.max(0, Math.floor(upper) + 1); py <= Math.min(c.height - 1, Math.ceil(lower)); py++) {
+    for (let px = Math.max(0, Math.ceil(left)); px <= Math.min(c.width - 1, Math.floor(right)); px++) {
       const fx = (px + 0.5 - left) / Math.max(1, right - left)
       const fy = (py + 0.5 - upper) / Math.max(1, lower - upper)
       // The bottom edge ripples where the crossbar never quite reached out.
@@ -1078,15 +1188,21 @@ function drawFlag(c: Canvas, v: View, x: number, d: number, planted: number, unf
 }
 
 // The surface: Eagle coming down `land` seconds into its landing, or
-// `isLongDown`, landed in an earlier turn; and the moonwalk `step` seconds
-// in, if begun.
-function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDown: boolean, time: number) {
-  const v = viewOf(c, step !== undefined && step >= CLOSE)
+// `isLongDown`, landed in an earlier turn; the moonwalk `step` seconds in,
+// if begun; and the eye where the person has turned it, once the flag is up.
+function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDown: boolean, time: number, levels: number, look?: Look) {
+  const v = viewOf(c, step !== undefined && step >= CLOSE, look)
   const ground = groundOf(c, v)
-  for (let i = v.horizon * c.width; i < c.color.length; i++) {
-    c.color[i] = ground[i] ?? 0
-    c.depth[i] = -Infinity
+  c.color.fill(0)
+  c.depth.fill(-Infinity)
+  for (const star of starsOf()) {
+    const far = dot(star.way, v.forward)
+    if (far < 0.05) continue
+    const px = Math.floor(v.cx + (v.f * dot(star.way, v.right)) / far)
+    const py = Math.floor(v.cy - (v.f * dot(star.way, v.up)) / far)
+    if (px >= 0 && py >= 0 && px < c.width && py < c.height) c.color[py * c.width + px] = shade(0xf4f6ff, star.bright * 0.8)
   }
+  drawEarthAbove(c, v, levels)
 
   // Eagle's way down: in from the east, slowing, then straight down to touch.
   const k = clamp((land - CUT) / (TOUCHDOWN - CUT), 0, 1)
@@ -1095,12 +1211,20 @@ function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDo
   const isDown = land >= TOUCHDOWN
   const isFiring = land < TOUCHDOWN + 0.2
 
-  // Shadows first, all to the west.
-  shadow(c, v, lmX, LM_D, 6.8 + lmY, 4.3, 2.4)
+  // The ground, its shadows all to the west.
   const walkers = step === undefined ? [] : moonwalk(step)
-  for (const w of walkers) shadow(c, v, w.x, w.d, 1.85 + w.y, 0.5, 0.25)
   const flagAt = step === undefined ? undefined : flagOf(step)
-  if (flagAt) shadow(c, v, FLAG_X, FLAG_D, 2.3, 0.3, 0.15)
+  const shadows: Shadow[] = [
+    { x: lmX, d: LM_D, tall: 6.8 + lmY, wide: 4.3, deep: 2.4 },
+    ...walkers.map(w => ({ x: w.x, d: w.d, tall: 1.85 + w.y, wide: 0.5, deep: 0.25 })),
+    ...(flagAt ? [{ x: FLAG_X, d: FLAG_D, tall: 2.3, wide: 0.3, deep: 0.15 }] : []),
+  ]
+  for (let i = 0; i < c.color.length; i++) {
+    const [x, d] = [ground.east[i] ?? NaN, ground.north[i] ?? NaN]
+    if (Number.isNaN(x)) continue
+    c.color[i] = shadows.some(s => isShaded(s, x, d)) ? shade(ground.colors[i] ?? 0, 0.45) : (ground.colors[i] ?? 0)
+    c.depth[i] = -1e7
+  }
 
   // The dust the engine blows out along the ground as it nears it.
   if (isFiring && lmY < 9) {
@@ -1132,8 +1256,9 @@ function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDo
       const at = STEP + print * 0.28
       if (step < at) break
       const w = neilAt(at)
-      const [bx, by] = project(v, w.x + (print % 2 === 0 ? 0.12 : -0.12), 0, w.d)
-      put(c, Math.floor(bx), Math.floor(by), shade(ground[Math.floor(by) * c.width + Math.floor(bx)] ?? 0x938e86, 0.62), -w.d - 0.5)
+      const [bx, by, bz] = project(v, w.x + (print % 2 === 0 ? 0.12 : -0.12), 0, w.d)
+      if (Number.isNaN(bx)) continue
+      put(c, Math.floor(bx), Math.floor(by), shade(c.color[Math.floor(by) * c.width + Math.floor(bx)] ?? 0x938e86, 0.62), bz + 0.5)
     }
   }
   if (flagAt) drawFlag(c, v, FLAG_X, FLAG_D, flagAt.planted, flagAt.unfurled)

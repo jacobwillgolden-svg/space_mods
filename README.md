@@ -46,7 +46,10 @@ requests and tool calls, or by its task list where it keeps one:
   Base; a `git push` (or a merge) puts Neil on the ladder, then the Moon, Buzz
   after him, and the flag up. A turn that lands Eagle and no more goes on from
   the Moon next turn; any other turn without a commit or a push starts over at
-  the pad.
+  the pad. Once the flag is up, drag over the picture to look round the Sea of
+  Tranquility: across and down to the west and up, Earth hangs where it did,
+  66.5° up and small and blue; scroll to zoom in on it, right-click to look
+  back at the flag.
 
 **Every agent flies a craft of its own**, after a real mission (Voyager,
 Cassini, Rosetta, Dawn, New Horizons...): it flies in when the agent starts,
@@ -121,4 +124,6 @@ MIT, for the code, the clips and the pictures in `docs/`. The panoramas were
 made with Grok's image generator. The craft are named after real missions and
 drawn as simple shapes; none of their agencies' artwork is used. Apollo 11's
 Earth is filled in from Natural Earth's 1:110m land outlines, which are in the
-public domain; its Moon's seas and craters are placed by their coordinates.
+public domain; its Moon's seas are traced from the albedo map of NASA's Lunar
+Reconnaissance Orbiter, also in the public domain, and its craters are placed
+by their coordinates or spread as the Moon's are.
