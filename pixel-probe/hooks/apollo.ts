@@ -1,7 +1,7 @@
 import type { View as TurnedView } from '../types'
 import { earthChart, moonChart } from './earth'
-import { fbm2, hash3, random } from './noise'
-import { blend, dither, glow, mix, put, shade } from './pixels'
+import { fbm2, hash3, random, smooth } from './noise'
+import { blend, canvas, dither, glow, mix, put, shade } from './pixels'
 import type { Canvas } from './pixels'
 import type { Chart } from './worlds'
 
@@ -423,7 +423,7 @@ function shotOf(m: Mission): Shot {
 
 // The mission's picture, over the sky scene.ts has drawn; `view`, the
 // person's drag and wheel on the dashboard, pulls the eye back from the
-// flag once it is up, until Earth shows above the landing site.
+// flag once it is up, and on up to orbit to see Earth rise.
 export function drawApollo(c: Canvas, m: Mission, time: number, levels: number, view?: TurnedView) {
   const shot = shotOf(m)
   switch (shot.kind) {
@@ -842,8 +842,9 @@ const LONG = 1 / Math.tan(rad(10.8))
 type View = { W: number; H: number; f: number; cx: number; cy: number; eye: Vec; right: Vec; up: Vec; forward: Vec; along: Vec }
 
 // How far a drag or the wheel has pulled the eye back from the flag, 0 to 1:
-// any drag, either way, or the wheel rolled out; a right-click on the
-// dashboard brings it back in.
+// any drag, either way, or the wheel rolled out; back to the landing site
+// seen from a distance, then up to orbit to see Earth rise (RISING, RISEN).
+// A right-click on the dashboard brings it back in.
 const pulledBack = (view: TurnedView | undefined) =>
   view === undefined ? 0 : clamp(Math.max(Math.abs(view.tip) / 0.9, Math.abs(view.spin) / 1.5, (1 - view.zoom) / 0.4), 0, 1)
 
@@ -876,6 +877,110 @@ const viewOf = (c: Canvas, isClose: boolean, back = 0): View => {
 
 // The moonwalk cuts in close as the flag goes in.
 const CLOSE = 9
+
+// How far back the drag goes before the picture starts to dissolve into the
+// view from orbit, and how far until it is all that is left.
+const RISING = 0.55
+const RISEN = 0.85
+
+// The view from orbit, as Apollo 11 photographed it there (AS11-44-6551):
+// 110 km up, looking along the ground to the horizon through a long lens,
+// Earth just risen over it, lit from above and half dark, the sun high over
+// the ground below. The ground is the Moon as a ball, each pixel's line of
+// sight followed down to it, and on it craters at three sizes, each drawn
+// only where it is big enough to see, so the far ground lies smooth. Made
+// once for each size.
+const ORBIT_HIGH = 110
+const MOON_KM = 1737.4
+const earthrises = new Map<string, Uint32Array>()
+
+function earthriseOf(width: number, height: number, levels: number): Uint32Array {
+  const key = `${width}x${height}:${levels}`
+  const known = earthrises.get(key)
+  if (known) return known
+  if (earthrises.size > 4) earthrises.clear()
+
+  const c = canvas(width, height)
+  const f = 4.4 * width
+  const [cx, cy] = [width / 2, Math.round(height * 0.5)]
+  const eye = MOON_KM + ORBIT_HIGH
+  // Looking at the horizon, down by its dip from 110 km up.
+  const dip = Math.acos(MOON_KM / eye)
+  const forward: Vec = [0, -Math.sin(dip), Math.cos(dip)]
+  const up: Vec = [0, Math.cos(dip), Math.sin(dip)]
+  const sun = unit3([-0.5, 0.75, 0.45])
+  for (let py = 0; py < height; py++) {
+    for (let px = 0; px < width; px++) {
+      const sight = unit3(plus(plus(forward, [1, 0, 0], (px + 0.5 - cx) / f), up, -(py + 0.5 - cy) / f))
+      // Where the line of sight meets the Moon, if it does before the horizon.
+      const toward = eye * sight[1]
+      const meets = toward * toward - (eye * eye - MOON_KM * MOON_KM)
+      if (meets < 0) continue
+      const far = -toward - Math.sqrt(meets)
+      if (far <= 0) continue
+      const ground: Vec = [sight[0] * far, eye + sight[1] * far, sight[2] * far]
+      const normal = times(ground, 1 / MOON_KM)
+      const [east, north] = [MOON_KM * Math.atan2(ground[0], ground[1]), MOON_KM * Math.atan2(ground[2], ground[1])]
+      // How much ground a pixel spans down the view, seen so slantwise.
+      const span = far / f / Math.max(0.03, -dot(sight, normal))
+      const [slopeEast, slopeNorth, shine] = cratersAt(east, north, span)
+      const across = unit3([normal[1], -normal[0], 0])
+      const along = unit3([0, -normal[2], normal[1]])
+      const tipped = unit3(plus(plus(normal, across, -slopeEast), along, -slopeNorth))
+      const lit = Math.max(0, dot(tipped, sun)) ** 0.6
+      const stepped = Math.min(1, Math.floor(lit * levels + dither(px, py)) / levels)
+      const dust = mix(0xa29e97, 0x8e8b85, smooth(0.35, 0.65, fbm2(east / 90, north / 90, 1969, 3)))
+      put(c, px, py, shade(dust, (0.08 + 0.92 * stepped) * shine), -far)
+    }
+  }
+
+  // Earth, just over the horizon, a seventh of the picture across.
+  const r = 0.0166 * f
+  const at = { x: cx, y: cy - 0.0236 * f, r, z: 1 }
+  // Lit from above, the sun high over the Moon: a little more than half of it.
+  const light = unit3([-0.18, 0.97, 0.12])
+  drawBall(c, earthChart(chartWidth(r)), at, facing(rad(-5), rad(-44), rad(-10)), light, levels, 0.02, 0.45)
+  drawAir(c, at, light)
+  earthrises.set(key, c.color)
+  return c.color
+}
+
+// The slopes east and north of the ground at (east, north) km from under
+// the eye, and how bright it is there: craters on grids of three sizes,
+// about half the cells holding one, each skipped where a pixel spans more
+// than its width; fresh small ones with bright rims.
+function cratersAt(east: number, north: number, span: number): readonly [number, number, number] {
+  let [slopeEast, slopeNorth, shine] = [0, 0, 1]
+  for (const cell of [48, 14, 4]) {
+    if (cell * 0.3 < span * 1.5) continue
+    const [i, j] = [Math.floor(east / cell), Math.floor(north / cell)]
+    for (let di = -1; di <= 1; di++) {
+      for (let dj = -1; dj <= 1; dj++) {
+        const [ci, cj] = [i + di, j + dj]
+        if (hash3(ci, cj, cell, 51) < 0.5) continue
+        const r = cell * (0.12 + 0.3 * hash3(ci, cj, cell, 52))
+        const [x, y] = [(ci + hash3(ci, cj, cell, 53)) * cell, (cj + hash3(ci, cj, cell, 54)) * cell]
+        const [dx, dy] = [east - x, north - y]
+        const far = Math.hypot(dx, dy)
+        const d = far / r
+        if (d > 1.7 || far === 0) continue
+        const [steep, floor, peak] = r > 15 ? [0.25, 0.5, 0.14] : r > 4 ? [0.4, 0.3, 0.12] : [0.6, 0, 0]
+        const slope =
+          d < peak
+            ? -steep * 1.6 * Math.sin((Math.PI * d) / peak)
+            : d < floor
+              ? 0
+              : d < 1
+                ? (steep * (d - floor)) / (1 - floor)
+                : -steep * 0.85 * (1 - (d - 1) / 0.7) ** 2
+        slopeEast += (slope * dx) / far
+        slopeNorth += (slope * dy) / far
+        if (r < 4 && d > 0.85 && d < 1.25 && hash3(ci, cj, cell, 55) > 0.8) shine *= 1.12
+      }
+    }
+  }
+  return [slopeEast, slopeNorth, shine]
+}
 
 // How far ahead of the eye (east, up, north) meters are.
 const ahead = (v: View, x: number, y: number, d: number) => dot([x - v.eye[0], y - v.eye[1], d - v.eye[2]], v.forward)
@@ -1214,7 +1319,12 @@ function drawFlag(c: Canvas, v: View, x: number, d: number, planted: number, unf
 // `isLongDown`, landed in an earlier turn; the moonwalk `step` seconds in,
 // if begun; and the eye pulled `back` from the flag, 0 to 1, once it is up.
 function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDown: boolean, time: number, levels: number, back: number) {
-  const v = viewOf(c, step !== undefined && step >= CLOSE, back)
+  // Pulled right back, only the view from orbit is left.
+  if (back >= RISEN) {
+    c.color.set(earthriseOf(c.width, c.height, levels))
+    return
+  }
+  const v = viewOf(c, step !== undefined && step >= CLOSE, Math.min(1, back / RISING))
   const ground = groundOf(c, v)
   c.color.fill(0)
   c.depth.fill(-Infinity)
@@ -1286,6 +1396,13 @@ function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDo
   }
   if (flagAt) drawFlag(c, v, FLAG_X, FLAG_D, flagAt.planted, flagAt.unfurled)
   for (const w of walkers) drawWalker(c, v, w.x, w.y, w.d, w.way, w.gait, w.stride)
+
+  // Pulled further back, the landing site dissolves into the view from orbit.
+  if (back > RISING) {
+    const rise = earthriseOf(c.width, c.height, levels)
+    const k = ease((back - RISING) / (RISEN - RISING))
+    for (let i = 0; i < c.color.length; i++) c.color[i] = mix(c.color[i] ?? 0, rise[i] ?? 0, k)
+  }
 }
 
 type Walker = { x: number; y: number; d: number; way: number; gait: Gait; stride: number }

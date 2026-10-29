@@ -47,8 +47,9 @@ requests and tool calls, or by its task list where it keeps one:
   after him, and the flag up. A turn that lands Eagle and no more goes on from
   the Moon next turn; any other turn without a commit or a push starts over at
   the pad. Once the flag is up, drag over the picture (or scroll out) to pull
-  back from the flag to the landing site seen from a distance, with Earth
-  hanging small and blue above it, 66.5° up as it did; right-click to go back
+  back from the flag to the landing site seen from a distance, Earth small and
+  blue high above it, then on up to orbit to see Earth rise over the Moon's
+  horizon as Apollo 11 photographed it (AS11-44-6551); right-click to go back
   in.
 
 **Every agent flies a craft of its own**, after a real mission (Voyager,
