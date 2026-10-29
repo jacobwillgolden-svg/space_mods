@@ -2,49 +2,57 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, TurnStepInput } from 'claude-code'
 
+import { describe } from '../hooks/caption'
+import type { Told, Words } from '../hooks/caption'
 import { CRAFT } from '../hooks/craft'
 import { ENDING_TICKS, LEAVE_SECONDS, TICK_MS, progressStage, toFrame } from '../hooks/frame'
 import type { FrameState } from '../hooks/frame'
-import { SVG_LIMIT, toSvg } from '../hooks/pixels'
 import { ROCKS } from '../hooks/rock'
-import { USUAL_VIEW, drawScene, fitBlocks, fitHD, turned, zoomed } from '../hooks/scene'
-import type { Steering } from '../hooks/steer'
+import { USUAL_VIEW, drawScene, turned, zoomed } from '../hooks/scene'
 import { WORLDS } from '../hooks/worlds'
 import type { Effort, Scene, Tasks, WorldName } from '../types'
 
-const PANE = {
-  plugin: 'pixel-probe',
-  component: 'Pane',
-  requestId: 'probe',
-  props: {
-    title: 'Probe',
-    isFocused: false,
-    bodyColumns: 40,
-    placement: 'dock',
-    scroll: { offset: 0, bodyRows: 40 },
-    view: {},
-  },
-} as const
-
-const SURFACES = ['terminal', 'desktop', 'vscode', 'mobile'] as const
-
 const TYPED = { origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } } as const
 
+// mc-rice's dashboard round the shell this session runs in (mirror.ts):
+// kitty's process and window, where the two meet, and the panel's own file,
+// fresh while `panel.shows` says what it shows, gone while it is undefined.
+// The kit hands paths on resolved against its own folder, so they are known
+// by how they end.
+const KITTY_ENV = { KITTY_PID: '7', KITTY_WINDOW_ID: '1', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' }
+const meets = (path: string, end: string) => path.replaceAll('/', '\\').endsWith(`\\mc-rice\\probe\\7-1${end}`)
+
+// What this session tells the panel: the scene, or that the session is over.
+type Published = { v: number; at?: number; ended?: boolean; state?: FrameState; told?: Told }
+
 // Nothing sits beneath the plugin: each hook here stands for the engine, the
-// Stop hooks answering `stop` and TaskCreate making task `a`. It keeps the
-// store in `stored`, counts the panes opened and the clips played, and notes
-// the panes closed. `given` is what the store holds and which panes are up
-// before the session starts, as a pane left up across a reload is.
+// Stop hooks answering `stop` and TaskCreate making task `a`, and for the
+// dashboard's panel round the shell, drawing the probe unless `given.panel`
+// says otherwise. It keeps the clock, the store in `stored` and what this
+// session tells the panel in `written`, oldest first, counts the panes opened
+// and the clips played, and notes the panes closed. `given` is what the store
+// holds and which panes are up before the session starts, as a pane an
+// earlier version left up across a reload is, and the environment the
+// session runs in, in kitty unless it says otherwise.
 function engine(
   on: On,
   settings: Record<string, unknown>,
   stop: { block?: string } = {},
-  given: { stored?: Record<string, unknown>; panes?: readonly string[] } = {},
+  given: { stored?: Record<string, unknown>; panes?: readonly string[]; env?: Record<string, string>; panel?: { shows: string | undefined } } = {},
 ) {
-  const seen = { opened: 0, closed: [] as string[], played: 0, stored: new Map(Object.entries(given.stored ?? {})) }
+  const clock = mock.clock(on, { now: 1_000_000 })
+  const panel = given.panel ?? { shows: 'probe' }
+  const seen = {
+    clock,
+    opened: 0,
+    closed: [] as string[],
+    played: 0,
+    stored: new Map(Object.entries(given.stored ?? {})),
+    written: [] as Published[],
+  }
   const up = new Set<string>(given.panes)
 
-  mock.env(on, {})
+  mock.env(on, given.env ?? KITTY_ENV)
   on('store.get', (_, e) => ({ value: seen.stored.get(e.key) }))
   on('store.set', (_, e) => {
     seen.stored.set(e.key, e.value)
@@ -62,6 +70,16 @@ function engine(
     return { value: undefined }
   })
   on('ui.panes', () => ({ value: [...up].map(id => ({ id, title: id, isShown: true, isFocused: false, isPlaced: true })) }))
+  on('fs.stat', (_, e) =>
+    meets(e.path, '.panel') && panel.shows !== undefined
+      ? { value: { kind: 'file', size: panel.shows.length, mtimeMs: clock.now() - 1000, isLink: false } }
+      : { deny: 'no such file' },
+  )
+  on('fs.read', (_, e) => (meets(e.path, '.panel') && panel.shows !== undefined ? { value: panel.shows } : { deny: 'no such file' }))
+  on('fs.write', (_, e) => {
+    if (meets(e.path, '.json')) seen.written.push(JSON.parse(e.text) as Published)
+    return { value: undefined }
+  })
   on('audio.play', () => {
     seen.played++
     return { value: undefined }
@@ -75,6 +93,7 @@ function engine(
   let spawned = 0
   on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: `agent-${++spawned}` }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
   on('command.run', () => ({ text: '' }))
   on('classic.Stop', () => stop)
   on('classic.UserPromptSubmit', () => ({}))
@@ -88,6 +107,8 @@ function engine(
 
   return seen
 }
+
+type Seen = ReturnType<typeof engine>
 
 async function start($: Engine) {
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
@@ -126,116 +147,144 @@ const spawn = ($: Engine, description: string, subagentType: string) =>
     fork: false,
   })
 
-async function shown($: Engine, text: RegExp) {
-  for (const surface of SURFACES) {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    expect((await ui.find({ type: 'Text', text }))?.text).toBeDefined()
-    await ui.unmount()
-  }
+// The scene as this session last told the dashboard's panel, once what is
+// under way has run.
+async function lastTold(seen: Seen): Promise<{ state: FrameState; told: Told }> {
+  await seen.clock.settle()
+  const last = seen.written.filter(one => one.state !== undefined).at(-1)
+  if (last?.state === undefined || last.told === undefined) throw new Error('the panel was told nothing')
+
+  return { state: last.state, told: last.told }
 }
 
-async function hidden($: Engine, text: RegExp) {
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text })).toBeUndefined()
-  await ui.unmount()
+// The words the panel puts under the picture, as mc-rice's
+// tools/probe-frames.ts says them: the world's name, and the caption.
+async function said(seen: Seen): Promise<Words> {
+  const { state, told } = await lastTold(seen)
+  return describe(toFrame(state), told)
 }
 
-// What the desktop's still picture says it shows.
-async function altText($: Engine): Promise<string> {
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const found = await ui.find({ type: 'Svg' })
-  await ui.unmount()
-  return (found?.props as { alt: string }).alt
+async function shown(seen: Seen, text: RegExp) {
+  const { name, caption } = await said(seen)
+  expect(text.test(name) ? name : caption).toMatch(text)
 }
 
-test('the world follows the effort level, on every surface', async ($, on) => {
-  engine(on, { effortLevel: 'medium' })
+async function hidden(seen: Seen, text: RegExp) {
+  const { name, caption } = await said(seen)
+  expect(`${name} · ${caption}`).not.toMatch(text)
+}
+
+// The craft Claude flies, as the panel draws it.
+const flown = async (seen: Seen) => CRAFT[(await lastTold(seen)).state.craft]?.name
+
+test('the world follows the effort level', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'medium' })
   await start($)
-  await shown($, /^Mars$/)
+  await shown(seen, /^Mars$/)
 
   await $.command.run({ command: 'effort', args: 'max', ...TYPED })
-  await shown($, /^Jupiter$/)
+  await shown(seen, /^Jupiter$/)
 
   const worlds = [['xhigh', 'Saturn'], ['low', 'The Moon'], ['high', 'Earth'], [4096, 'Neptune'], [undefined, 'Pluto']] as const
   for (const [level, name] of worlds) {
     await step($, level)
-    await shown($, new RegExp(`^${name}$`))
+    await shown(seen, new RegExp(`^${name}$`))
   }
 })
 
 test('with no saved level the probe waits for the first request', async ($, on) => {
-  engine(on, {})
+  const seen = engine(on, {})
   await start($)
-  await shown($, /^Pluto$/)
-  await shown($, /shows on the next turn/)
+  await shown(seen, /^Pluto$/)
+  await shown(seen, /shows on the next turn/)
 })
 
 test('in the usual modes the orbit is charted as Claude works and complete when Claude stops', async ($, on) => {
-  const clock = mock.clock(on)
-  engine(on, { effortLevel: 'max' })
+  const seen = engine(on, { effortLevel: 'max' })
   await start($)
 
   await prompt($, 'default')
   await $.turn.start({ text: 'hi', turnId: 't1' })
-  await shown($, /default mode · orbiting\.\.\. 0% charted/)
+  await shown(seen, /default mode · orbiting\.\.\. 0% charted/)
 
   await work($, 8)
-  await shown($, /orbiting\.\.\. 60% charted/)
+  await shown(seen, /orbiting\.\.\. 60% charted/)
 
   await stop($, 'default')
-  await shown($, /orbit complete/)
+  await shown(seen, /orbit complete/)
 
   await complete($, 't1')
-  await clock.advance(ENDING_TICKS.orbit * TICK_MS + 200)
-  await shown($, /orbit complete/)
+  await seen.clock.advance(ENDING_TICKS.orbit * TICK_MS + 200)
+  await shown(seen, /orbit complete/)
 
   // The next turn charts a fresh orbit.
   await $.turn.start({ text: 'again', turnId: 't2' })
-  await shown($, /orbiting\.\.\. 0% charted/)
+  await shown(seen, /orbiting\.\.\. 0% charted/)
 })
 
 test('in plan mode the probe surveys, the map made when Claude stops', async ($, on) => {
-  const clock = mock.clock(on)
-  engine(on, { effortLevel: 'high' })
+  const seen = engine(on, { effortLevel: 'high' })
   await start($)
 
   await prompt($, 'plan')
   await $.turn.start({ text: 'plan it', turnId: 't1' })
-  await shown($, /plan mode · surveying\.\.\. 0% mapped/)
-  expect(await altText($)).toBe('Juno surveying Earth')
+  await shown(seen, /plan mode · surveying\.\.\. 0% mapped/)
+  await shown(seen, /^Earth$/)
+  expect(await flown(seen)).toBe('Juno')
 
   await work($, 8)
-  await shown($, /surveying\.\.\. 60% mapped/)
+  await shown(seen, /surveying\.\.\. 60% mapped/)
 
   await stop($, 'plan')
   await complete($, 't1')
-  await clock.advance(ENDING_TICKS.survey * TICK_MS + 200)
-  await shown($, /survey complete/)
+  await seen.clock.advance(ENDING_TICKS.survey * TICK_MS + 200)
+  await shown(seen, /survey complete/)
 })
 
 test('in auto mode the probe mines an asteroid that shatters when Claude stops', async ($, on) => {
-  const clock = mock.clock(on)
-  engine(on, { effortLevel: 'xhigh' })
+  const seen = engine(on, { effortLevel: 'xhigh' })
   await start($)
 
   await prompt($, 'auto')
   await $.turn.start({ text: 'go', turnId: 't1' })
-  await shown($, /auto mode · mining\.\.\. comet 0% cracked/)
-  expect(await altText($)).toBe('Juno mining a comet near Saturn')
+  await shown(seen, /auto mode · mining\.\.\. comet 0% cracked/)
+  await shown(seen, /^Saturn$/)
+  expect(await flown(seen)).toBe('Juno')
 
   await work($, 8)
-  await shown($, /comet 60% cracked/)
+  await shown(seen, /comet 60% cracked/)
 
   await stop($, 'auto')
-  await shown($, /comet shattered/)
+  await shown(seen, /comet shattered/)
   await complete($, 't1')
-  await clock.advance(ENDING_TICKS.asteroid * TICK_MS + 200)
-  await shown($, /comet shattered/)
+  await seen.clock.advance(ENDING_TICKS.asteroid * TICK_MS + 200)
+  await shown(seen, /comet shattered/)
+})
+
+test('a turn that saved the mod reloads it as the asteroid shatters, and the shatter plays out', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'xhigh' })
+  await start($)
+
+  await prompt($, 'auto')
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await work($, 8)
+  await stop($, 'auto')
+  await complete($, 't1')
+  await seen.clock.advance(3 * TICK_MS)
+
+  // The reload runs session.start again, a few ticks into the ending.
+  await start($)
+  await seen.clock.advance(3 * TICK_MS)
+  const { state } = await lastTold(seen)
+  expect(toFrame(state).target.kind).toBe('ending')
+
+  await seen.clock.advance(ENDING_TICKS.asteroid * TICK_MS)
+  expect((await lastTold(seen)).state.target.phase).toBe('gone')
+  await shown(seen, /comet shattered/)
 })
 
 test('the harder Claude thinks, the tougher the asteroid', async ($, on) => {
-  mock.clock(on)
-  engine(on, { effortLevel: 'low' })
+  const seen = engine(on, { effortLevel: 'low' })
   await start($)
 
   await prompt($, 'auto')
@@ -245,47 +294,44 @@ test('the harder Claude thinks, the tougher the asteroid', async ($, on) => {
   ]
   for (const [level, rock] of rocks) {
     await step($, level)
-    await shown($, new RegExp(`mining\\.\\.\\. ${rock} \\d+% cracked`))
+    await shown(seen, new RegExp(`mining\\.\\.\\. ${rock} \\d+% cracked`))
   }
 })
 
 test('a mode change mid-turn swaps the scene at once', async ($, on) => {
-  mock.clock(on)
-  engine(on, { effortLevel: 'high' })
+  const seen = engine(on, { effortLevel: 'high' })
   await start($)
 
   await prompt($, 'plan')
   await $.turn.start({ text: 'plan it', turnId: 't1' })
-  await shown($, /surveying/)
+  await shown(seen, /surveying/)
 
   await $.classic.PostToolUse({ tool_name: 'ExitPlanMode', tool_input: {}, tool_response: {}, tool_use_id: 'x', permission_mode: 'acceptEdits' })
-  await shown($, /acceptEdits mode · orbiting\.\.\. 0% charted/)
+  await shown(seen, /acceptEdits mode · orbiting\.\.\. 0% charted/)
 })
 
 test('a Stop hook that sends Claude back to work keeps the orbit going', async ($, on) => {
-  mock.clock(on)
-  engine(on, { effortLevel: 'high' }, { block: 'not done yet' })
+  const seen = engine(on, { effortLevel: 'high' }, { block: 'not done yet' })
   await start($)
 
   await prompt($, 'default')
   await $.turn.start({ text: 'hi', turnId: 't1' })
   await stop($, 'default')
-  await shown($, /orbiting\.\.\./)
+  await shown(seen, /orbiting\.\.\./)
 })
 
 test('an interrupted turn leaves the target standing, progress and all', async ($, on) => {
-  mock.clock(on)
-  engine(on, { effortLevel: 'high' })
+  const seen = engine(on, { effortLevel: 'high' })
   await start($)
 
   await prompt($, 'plan')
   await $.turn.start({ text: 'hi', turnId: 't1' })
   await work($, 8)
   await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't1', reason: 'aborted' })
-  await shown($, /idle/)
+  await shown(seen, /idle/)
 
   await $.turn.start({ text: 'go on', turnId: 't2' })
-  await shown($, /60% mapped/)
+  await shown(seen, /60% mapped/)
 })
 
 test('progress grows with work and stops short of done', () => {
@@ -310,8 +356,7 @@ test('with a task list, progress follows the tasks done', () => {
 })
 
 test('task tools feed the progress', async ($, on) => {
-  mock.clock(on)
-  engine(on, { effortLevel: 'high' })
+  const seen = engine(on, { effortLevel: 'high' })
   await start($)
 
   await prompt($, 'plan')
@@ -323,74 +368,91 @@ test('task tools feed the progress', async ($, on) => {
     { content: 'four', status: 'pending', activeForm: 'Doing four' },
   ] })
   // Two of four done, the work since creeping a little: 50%.
-  await shown($, /50% mapped/)
+  await shown(seen, /50% mapped/)
 
   await $.tool.call({ tool: 'TaskUpdate', taskId: 'a', status: 'completed' })
-  await shown($, /70% mapped/)
+  await shown(seen, /70% mapped/)
 })
 
 test('/probe keeps a scene, a world and a craft, across sessions, and lets each go again', async ($, on) => {
-  mock.clock(on)
   const seen = engine(on, { effortLevel: 'low' })
   await start($)
 
   expect((await probe($, 'asteroid')).text).toBe('The probe will mine asteroids whatever the mode.')
   await prompt($, 'default')
   await $.turn.start({ text: 'go', turnId: 't1' })
-  await shown($, /mining\.\.\. stony asteroid/)
+  await shown(seen, /mining\.\.\. stony asteroid/)
 
   expect((await probe($, 'jupiter')).text).toMatch(/visits Jupiter whatever the effort/)
-  await shown($, /^Jupiter$/)
+  await shown(seen, /^Jupiter$/)
   expect((await probe($, 'New  Horizons')).text).toMatch(/Claude flies New Horizons now/)
-  expect(await altText($)).toBe('New Horizons mining a stony asteroid near Jupiter')
+  expect(await flown(seen)).toBe('New Horizons')
+  await shown(seen, /mining\.\.\. stony asteroid/)
   expect(Object.fromEntries(seen.stored)).toMatchObject({ scene: 'asteroid', world: 'jupiter', craft: 'New Horizons' })
 
   expect((await probe($, 'follow')).text).toBe('The scene follows the permission mode again.')
-  await shown($, /orbiting\.\.\./)
+  await shown(seen, /orbiting\.\.\./)
   expect((await probe($, 'effort')).text).toBe('The effort level picks the world again.')
-  await shown($, /^The Moon$/)
+  await shown(seen, /^The Moon$/)
   expect((await probe($, 'juno')).text).toBe('Claude flies Juno again.')
+  expect(await flown(seen)).toBe('Juno')
   expect(Object.fromEntries(seen.stored)).toMatchObject({ scene: null, world: null, craft: null })
 })
 
 test('what /probe kept is there when the next session starts', async ($, on) => {
-  mock.clock(on)
-  engine(on, { effortLevel: 'low' }, {}, { stored: { scene: 'survey', world: 'saturn', craft: 'Cassini' } })
+  const seen = engine(on, { effortLevel: 'low' }, {}, { stored: { scene: 'survey', world: 'saturn', craft: 'Cassini' } })
   await start($)
 
-  await shown($, /^Saturn$/)
-  expect(await altText($)).toBe('Cassini surveying Saturn')
+  await shown(seen, /^Saturn$/)
+  expect(await flown(seen)).toBe('Cassini')
+  expect((await lastTold(seen)).state.target.scene).toBe('survey')
 })
 
-test('/probe off closes the pane and keeps it closed in new sessions; /probe on brings it back', async ($, on) => {
-  mock.clock(on)
-  const seen = engine(on, { effortLevel: 'high' })
+test('/probe off and on keep whether the dashboard draws the probe, in new sessions too, and no pane ever opens', async ($, on) => {
+  const panel: { shows: string | undefined } = { shows: 'probe' }
+  const seen = engine(on, { effortLevel: 'high' }, {}, { panel })
   await start($)
-  expect(seen.opened).toBe(1)
+  // The dashboard draws the probe only once /probe on has asked for it.
+  expect(seen.stored.has('hidden')).toBe(false)
 
-  expect((await probe($, 'off')).text).toMatch(/stays off in new sessions/)
-  expect(seen.closed).toEqual(['probe'])
+  expect((await probe($, 'off')).text).toBe('The probe is off the dashboard, and stays off in new sessions: /probe on brings it back.')
+  expect(seen.stored.get('hidden')).toBe(true)
+  panel.shows = 'off'
   await start($)
-  expect(seen.opened).toBe(1)
+  expect(seen.stored.get('hidden')).toBe(true)
 
-  expect((await probe($, 'on')).text).toBe('The probe is beside the chat.')
-  expect(seen.opened).toBe(2)
+  expect((await probe($, 'on')).text).toBe("The probe is on the dashboard, in Steve's place.")
+  expect(seen.stored.get('hidden')).toBe(false)
+  expect((await probe($, '')).text).toBe("The probe is on the dashboard, in Steve's place.")
+  // Drawing it is the dashboard's alone: there is no picture here to draw finer.
+  expect((await probe($, 'hd')).text).toMatch(/doesn't know "hd"/)
   expect((await probe($, 'warp drive')).text).toMatch(/doesn't know "warp drive"/)
+  expect(seen.opened).toBe(0)
+  expect(seen.closed).toEqual([])
+})
+
+test('a pane an earlier version left up beside the chat is closed as the session starts, and none opens', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' }, {}, { panes: ['probe', 'notes'] })
+  await start($)
+  expect(seen.closed).toEqual(['probe'])
+
+  // A reload with it gone closes nothing more.
+  await start($)
+  expect(seen.closed).toEqual(['probe'])
+  expect(seen.opened).toBe(0)
 })
 
 test('agents fly in as craft of their own, never the one Claude flies, and fly off when done', async ($, on) => {
-  const clock = mock.clock(on)
-  engine(on, { effortLevel: 'high' })
+  const seen = engine(on, { effortLevel: 'high' })
   await start($)
   await probe($, 'voyager')
 
   const ids = []
   for (const task of ['a', 'b', 'c']) ids.push((await spawn($, task, 'Explore')).agentId)
-  await clock.advance(500)
+  await seen.clock.advance(500)
 
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const caption = (await ui.find({ type: 'Text', text: /3 agents: / }))?.text ?? ''
-  await ui.unmount()
+  const { caption } = await said(seen)
+  expect(caption).toMatch(/3 agents: /)
   const names = caption.replace(/.*3 agents: /, '').split(', ')
   expect(names).toHaveLength(3)
   expect(new Set(names).size).toBe(3)
@@ -398,14 +460,16 @@ test('agents fly in as craft of their own, never the one Claude flies, and fly o
   for (const name of names) expect(CRAFT.some(craft => craft.name === name)).toBe(true)
 
   for (const agentId of ids) await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'a', reason: 'answer', agentId })
-  await hidden($, /agents?: /)
-  await clock.advance(LEAVE_SECONDS * 1000 + 500)
-  await hidden($, /agents?: /)
+  await hidden(seen, /agents?: /)
+  await seen.clock.advance(LEAVE_SECONDS * 1000 + 500)
+  await hidden(seen, /agents?: /)
+  // Flown off, they are drawn no more.
+  expect((await lastTold(seen)).state.helpers).toEqual({})
 })
 
-test('sound stays off until asked for, and plays while the pane shows', async ($, on) => {
-  const clock = mock.clock(on)
-  const seen = engine(on, { effortLevel: 'high' })
+test('sound stays off until asked for, and plays only while the dashboard draws the probe', async ($, on) => {
+  const panel: { shows: string | undefined } = { shows: 'probe' }
+  const seen = engine(on, { effortLevel: 'high' }, {}, { panel })
   await start($)
 
   const turn = async (turnId: string) => {
@@ -414,7 +478,7 @@ test('sound stays off until asked for, and plays while the pane shows', async ($
     await work($, 8)
     await stop($, 'default')
     await complete($, turnId)
-    await clock.advance(ENDING_TICKS.orbit * TICK_MS + 200)
+    await seen.clock.advance(ENDING_TICKS.orbit * TICK_MS + 200)
   }
   await turn('t1')
   expect(seen.played).toBe(0)
@@ -423,107 +487,27 @@ test('sound stays off until asked for, and plays while the pane shows', async ($
   await turn('t2')
   expect(seen.played).toBeGreaterThan(0)
 
-  const before = seen.played
-  await probe($, 'sound')
+  // Steve in the dashboard's place, or no dashboard at all: nothing to hear.
+  let before = seen.played
+  panel.shows = 'steve'
+  await seen.clock.advance(2100)
   await turn('t3')
   expect(seen.played).toBe(before)
-})
+  panel.shows = undefined
+  await seen.clock.advance(2100)
+  await turn('t4')
+  expect(seen.played).toBe(before)
 
-test('/probe hd draws real pixels where the terminal can, blocks where it cannot', async ($, on) => {
-  const clock = mock.clock(on)
-  engine(on, { effortLevel: 'high' })
-  let refusal: string | undefined
-  on('ui.blit', () => ({ value: refusal === undefined ? {} : { deny: refusal } }))
-  await start($)
+  // Drawn there again, heard again, until `sound` alone mutes it.
+  panel.shows = 'probe'
+  await seen.clock.advance(2100)
+  await turn('t5')
+  expect(seen.played).toBeGreaterThan(before)
 
-  const drawn = async (surface: (typeof SURFACES)[number] = 'terminal', query: { key?: string; type?: string; text?: RegExp } = { key: 'scene' }) => {
-    const ui = await $.ui.mount({ ...PANE, surface })
-    const found = await ui.find(query)
-    await ui.unmount()
-    return found
-  }
-
-  expect((await drawn())?.type).toBe('Raster')
-
-  await probe($, 'hd')
-  expect((await drawn())?.type).toBe('Image')
-  await clock.advance(400)
-  expect((await drawn())?.type).toBe('Image')
-
-  // Where the terminal draws the alt instead, every probe is refused: blocks, and why.
-  refusal = 'no placeholder images'
-  await probe($, 'hd')
-  expect((await drawn())?.type).toBe('Image')
-  await clock.advance(3500)
-  expect((await drawn())?.type).toBe('Raster')
-  expect(await drawn('terminal', { type: 'Text', text: /HD off here: no placeholder images/ })).toBeDefined()
-
-  await probe($, 'blocks')
-  expect((await drawn())?.type).toBe('Raster')
-  expect(await drawn('desktop', { type: 'Svg' })).toBeDefined()
-})
-
-test('the picture fills the pane: blocks two pixels a row, HD the same box in finer pixels', async ($, on) => {
-  mock.clock(on)
-  engine(on, { effortLevel: 'high' })
-  on('ui.blit', () => ({ value: {} }))
-  await start($)
-
-  expect(fitBlocks(66, 36)).toEqual({ width: 66, height: 64 })
-  expect(fitHD(100, 60, 384)).toEqual({ columns: 100, rows: 50, width: 384, height: 384 })
-  expect(fitHD(160, 40, 384)).toEqual({ columns: 160, rows: 36, width: 768, height: 346 })
-
-  const scene = async (bodyColumns: number, bodyRows: number) => {
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns, scroll: { offset: 0, bodyRows } } })
-    const found = await ui.find({ key: 'scene' })
-    await ui.unmount()
-    return found?.props
-  }
-  expect(await scene(66, 36)).toMatchObject({ columns: 66, rows: 32 })
-
-  await probe($, 'hd')
-  expect(await scene(100, 60)).toMatchObject({ columns: 100, rows: 50, source: { width: 384, height: 384 } })
-  expect(await scene(160, 40)).toMatchObject({ columns: 160, rows: 36, source: { width: 768, height: 346 } })
-})
-
-test('the wheel zooms about the pointer, a drag spins and tips the world, a right click puts it back', async ($, on) => {
-  mock.clock(on)
-  engine(on, { effortLevel: 'max' })
-  await start($)
-
-  const picture = async () => {
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    const found = await ui.find({ key: 'scene' })
-    await ui.unmount()
-    return JSON.stringify(found?.props)
-  }
-  const post = async (data: Steering) => {
-    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    await ui.post(data)
-    await ui.unmount()
-  }
-  const usual = await picture()
-
-  const scrolled = await $.ui.scroll({
-    component: 'Pane', requestId: 'probe', offset: 0, by: -1, bodyRows: 40, contentRows: 40,
-    origin: { kind: 'person' }, pointer: { column: 5, row: 5 },
-  })
-  expect(scrolled).toEqual({})
-  const zoomedIn = await picture()
-  expect(zoomedIn).not.toBe(usual)
-
-  await post({ drag: { n: 1, across: 0.25, down: 0.1, isDone: true } })
-  const dragged = await picture()
-  expect(dragged).not.toBe(zoomedIn)
-
-  // A finished drag's straggler, handled late, changes nothing.
-  await post({ drag: { n: 1, across: 0.6, down: 0, isDone: false } })
-  expect(await picture()).toBe(dragged)
-
-  const clicking = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await clicking.pointer({ type: 'down', x: 4, y: 4, button: 'right' })
-  await clicking.unmount()
-  expect(await picture()).toBe(usual)
+  before = seen.played
+  await probe($, 'sound')
+  await turn('t6')
+  expect(seen.played).toBe(before)
 })
 
 test('the view tips only so far and zooms only so near or far, keeping what is under the pointer there', () => {
@@ -557,13 +541,12 @@ const frameOf = (scene: Scene, world: WorldName, effort: Effort = 'high', more: 
   })
 
 // Each world's face and each sky is made the first time it is drawn at a size, a moment's work each.
-test('every world draws in every scene, the same each time, and fits an Svg', { timeoutMs: 30_000 }, () => {
+test('every world draws in every scene, the same each time', { timeoutMs: 30_000 }, () => {
   for (const world of Object.keys(WORLDS) as WorldName[]) {
     for (const scene of ['orbit', 'survey', 'asteroid'] as const) {
       const first = drawScene(frameOf(scene, world), 66, 64)
       expect(first.color.length).toBe(66 * 64)
       expect(drawScene(frameOf(scene, world), 66, 64).color).toEqual(first.color)
-      expect(toSvg(drawScene(frameOf(scene, world), 128), 12).length).toBeLessThan(SVG_LIMIT)
     }
   }
 })
@@ -590,4 +573,110 @@ test('a still picture shows everything in place, each agent at work and none lea
   expect(frame.crew.map(hand => hand.name)).toEqual(['Voyager'])
   expect(frame.world).toBe(WORLDS.jupiter)
   expect(frame.rock).toBe(ROCKS.max)
+})
+
+test("with the dashboard's panel drawing the probe it hears every change, a tick at a time", async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await seen.clock.settle()
+  expect(seen.written.length).toBeGreaterThan(0)
+
+  await prompt($, 'plan')
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await seen.clock.advance(200)
+  expect(seen.written.at(-1)?.state?.target.scene).toBe('survey')
+  expect(seen.written.at(-1)?.told?.seen).toBe('plan')
+  // The camera is the panel's own, as its mouse turns it.
+  expect(seen.written.at(-1)?.state?.view).toBeUndefined()
+
+  const before = seen.written.length
+  await seen.clock.advance(1000)
+  const ticks = seen.written.slice(before).map(one => one.state?.tick)
+  expect(ticks.length).toBeGreaterThanOrEqual(9)
+  expect(ticks.length).toBeLessThanOrEqual(11)
+  expect(new Set(ticks).size).toBe(ticks.length)
+
+  await stop($, 'plan')
+  await seen.clock.settle()
+  expect(seen.written.at(-1)?.state?.target.phase).toBe('ending')
+
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 's1', resume: { id: 's1' } })
+  expect(seen.written.at(-1)).toEqual({ v: 1, ended: true })
+})
+
+test("with Steve or Jarvis in the dashboard's place the probe is untold, and /probe on says what frees the place", async ($, on) => {
+  const panel: { shows: string | undefined } = { shows: 'steve' }
+  const seen = engine(on, { effortLevel: 'high' }, {}, { panel })
+  await start($)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await seen.clock.advance(1000)
+  expect(seen.written).toEqual([])
+
+  expect((await probe($, 'on')).text).toBe("Steve has the dashboard's panel: /steve off, and the probe takes over.")
+  panel.shows = 'jarvis'
+  expect((await probe($, 'on')).text).toBe("Jarvis has the dashboard's panel: /jarvis off and /steve off, and the probe takes over.")
+  expect(seen.written).toEqual([])
+
+  // /jarvis off and /steve off: the panel draws the probe, and hears from this session.
+  panel.shows = 'probe'
+  await seen.clock.advance(2100)
+  expect(seen.written.at(-1)?.state).toBeDefined()
+  expect((await probe($, 'on')).text).toBe("The probe is on the dashboard, in Steve's place.")
+  expect(seen.opened).toBe(0)
+})
+
+test("as the dashboard's panel goes the probe is untold, and told again as it comes back", async ($, on) => {
+  const panel: { shows: string | undefined } = { shows: 'probe' }
+  const seen = engine(on, { effortLevel: 'high' }, {}, { panel })
+  await start($)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await seen.clock.advance(300)
+  expect(seen.written.length).toBeGreaterThan(0)
+
+  panel.shows = undefined
+  await seen.clock.advance(2100)
+  const before = seen.written.length
+  await seen.clock.advance(1000)
+  expect(seen.written.length).toBe(before)
+
+  panel.shows = 'probe'
+  await seen.clock.advance(2100)
+  expect(seen.written.length).toBeGreaterThan(before)
+  expect(seen.opened).toBe(0)
+})
+
+test("with the dashboard's panel down nothing is told, and /probe on says the probe shows only there", async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' }, {}, { panel: { shows: undefined } })
+  await start($)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await seen.clock.advance(1000)
+  expect(seen.written).toEqual([])
+  expect((await probe($, 'on')).text).toBe("The probe is on: it shows only on mc-rice's dashboard, and none is round this shell.")
+  expect(seen.opened).toBe(0)
+})
+
+test('outside kitty there is no dashboard to tell, and /probe on says so', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' }, {}, { env: {} })
+  await start($)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await seen.clock.advance(1000)
+  expect(seen.written).toEqual([])
+  expect((await probe($, 'on')).text).toBe("The probe is on: it shows only on mc-rice's dashboard, and none is round this shell.")
+  expect(seen.opened).toBe(0)
+})
+
+test("after /clear Claude goes on, and so does the dashboard's panel; after an exit it hears no more", async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await seen.clock.advance(300)
+
+  await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })
+  await seen.clock.advance(300)
+  expect(seen.written.some(one => one.ended)).toBe(false)
+  expect(seen.written.at(-1)?.state).toBeDefined()
+
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 's2', resume: { id: 's2' } })
+  await seen.clock.advance(1000)
+  expect(seen.written.at(-1)).toEqual({ v: 1, ended: true })
 })

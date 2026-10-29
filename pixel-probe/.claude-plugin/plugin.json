@@ -1,7 +1,7 @@
 {
   "name": "pixel-probe",
   "version": "0.1.0",
-  "description": "A pixel-art space probe beside the chat, orbiting a world that tracks Claude's effort level",
+  "description": "A pixel-art space probe on mc-rice's dashboard, in Steve's place, orbiting a world that tracks Claude's effort level",
   "author": {
     "name": "jacobwillgolden-svg"
   },

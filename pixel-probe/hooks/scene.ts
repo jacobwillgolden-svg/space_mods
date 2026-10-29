@@ -531,25 +531,3 @@ function crewPose(
 
   return { x, y, z, size, spin: frame.time * 2 + luck * 6, shine }
 }
-
-// The picture's pixels in blocks, filling the pane's body: as many across as
-// columns, as tall as two pixels a row less the caption's rows, square at most.
-export function fitBlocks(columns: number, rows: number): { width: number; height: number } {
-  const width = Math.max(16, Math.min(256, columns))
-  const height = Math.max(16, Math.min(128, width, (rows - 4) * 2))
-
-  return { width, height: height - (height % 2) }
-}
-
-// The HD picture's box of cells, the same shape: a cell is about twice as
-// tall as it is wide. The terminal scales the picture to fill it, so it is
-// drawn `tall` pixels high and as much wider as the box is, up to twice.
-export function fitHD(columns: number, rows: number, tall: number): { columns: number; rows: number; width: number; height: number } {
-  const across = Math.max(8, Math.min(254, columns))
-  const even = across - (across % 2)
-  const down = Math.max(4, Math.min(even / 2, rows - 4))
-  const aspect = even / (2 * down)
-  const width = Math.min(2 * tall, Math.round(tall * aspect))
-
-  return { columns: even, rows: down, width, height: Math.round(width / aspect) }
-}

@@ -19,17 +19,20 @@ const SCENES: Record<Scene, Record<Moment, Cue>> = {
   asteroid: { arrive: [['rumble', 0]], stage: [['zap', 0]], end: [['boom', 0]] },
 }
 
-// The probe's pane, as register.tsx opens it.
-const PANE = 'probe'
+// Whether the dashboard's panel round this session's shell draws the probe
+// (mirror.ts): the only place it is drawn.
+let isOnDashboard = false
+
+export function showOnDashboard(isShown: boolean) {
+  isOnDashboard = isShown
+}
 
 // Whether the probe keeps quiet: sound is off until /probe sound on, and
-// with the pane not showing there is nothing to hear. The pane, not /probe
-// off's saved flag: that one is every session's, so an off in one would hush
-// another still showing it.
+// with the dashboard's panel not drawing it for this session there is
+// nothing to hear. The panel, not /probe off's saved flag: that one is every
+// session's, so an off in one would hush another still showing it.
 async function isQuiet($: EngineInterface): Promise<boolean> {
-  if ((await $.store.get('sound')) !== true) return true
-
-  return !(await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
+  return !isOnDashboard || (await $.store.get('sound')) !== true
 }
 
 // Plays a moment of a scene, unless sound is off.

@@ -70,33 +70,6 @@ const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map(n => (n
 
 export const dither = (x: number, y: number) => BAYER[((y & 3) << 2) | (x & 3)] ?? 0.5
 
-// The terminal packs two pixels into each cell with half blocks.
-export const cellsOf = (c: Canvas) => ({ columns: c.width, rows: Math.ceil(c.height / 2) })
-
-const DEFAULT = 0x01000000
-const UPPER_HALF = 0x2580
-const FULL = 0x2588
-
-// RasterProps.cells: per cell, [codePoint, foreground, background] as little-endian u32s.
-export function toCells(c: Canvas): string {
-  const { columns, rows } = cellsOf(c)
-  const words = new Uint32Array(columns * rows * 3)
-  let at = 0
-
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < columns; x++) {
-      const top = c.color[2 * y * columns + x] ?? 0
-      const bottom = 2 * y + 1 < c.height ? (c.color[(2 * y + 1) * columns + x] ?? 0) : undefined
-      words[at] = bottom === undefined ? UPPER_HALF : top === bottom ? FULL : UPPER_HALF
-      words[at + 1] = top
-      words[at + 2] = bottom === undefined || top === bottom ? DEFAULT : bottom
-      at += 3
-    }
-  }
-
-  return toBase64(new Uint8Array(words.buffer))
-}
-
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
 const CODES = Uint8Array.from(ALPHABET, ch => ch.charCodeAt(0))
@@ -128,8 +101,9 @@ function toBase64(bytes: Uint8Array): string {
   return slices.join('')
 }
 
-// The same pixels as an Image's RGBA bytes, base64, every one opaque, each
-// drawn `k` by `k` so the terminal's scaling keeps them square and sharp.
+// The same pixels as RGBA bytes, base64, every one opaque, each drawn `k` by
+// `k` so kitty's scaling keeps them square and sharp: the dashboard's picture
+// (mc-rice's tools/probe-frames.ts).
 export function toRgba(c: Canvas, k = 1): string {
   const width = c.width * k
   const words = new Uint32Array(width * c.height * k)
@@ -145,44 +119,3 @@ export function toRgba(c: Canvas, k = 1): string {
 
   return toBase64(new Uint8Array(words.buffer))
 }
-
-// The most an Svg's source may run to.
-export const SVG_LIMIT = 131072
-
-// The same pixels for surfaces that draw SVG: one path per color, each run
-// of it a one-pixel-high rectangle, `M x y h w v1 h-w z`. Each channel is
-// rounded to `step` first, so a nebula's soft shades make long runs.
-export function toSvg(c: Canvas, step = 1): string {
-  const runs = new Map<number, string[]>()
-  const round = (color: number) => {
-    if (step <= 1) return color
-    const channel = (shift: number) => Math.min(255, Math.round(((color >> shift) & 255) / step) * step)
-    return (channel(16) << 16) | (channel(8) << 8) | channel(0)
-  }
-
-  for (let y = 0; y < c.height; y++) {
-    let x = 0
-
-    while (x < c.width) {
-      const color = round(c.color[y * c.width + x] ?? 0)
-      let end = x + 1
-      while (end < c.width && round(c.color[y * c.width + end] ?? 0) === color) end++
-
-      const width = end - x
-      const run = `M${x} ${y}h${width}v1h-${width}z`
-      const known = runs.get(color)
-      if (known) known.push(run)
-      else runs.set(color, [run])
-      x = end
-    }
-  }
-
-  const paths = [...runs].map(([color, drawn]) => `<path fill="${hex(color)}" d="${drawn.join('')}"/>`)
-
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${c.width} ${c.height}" ` +
-    `shape-rendering="crispEdges">${paths.join('')}</svg>`
-  )
-}
-
-export const hex = (color: number) => '#' + color.toString(16).padStart(6, '0')

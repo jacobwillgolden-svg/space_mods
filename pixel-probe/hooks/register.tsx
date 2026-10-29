@@ -1,19 +1,18 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, ImageSource, Register, Timer } from 'claude-code'
+import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Effort, Scene, Tasks, View, WorldName } from '../types'
-import { describe } from './caption'
+import type { Effort, Scene, Tasks, WorldName } from '../types'
 import type { Told } from './caption'
 import { CRAFT } from './craft'
-import { ENDING_TICKS, LEAVE_SECONDS, TICK_MS, progressStage, sceneFor, toFrame } from './frame'
-import type { Frame, FrameState } from './frame'
-import { SVG_LIMIT, cellsOf, toCells, toRgba, toSvg } from './pixels'
-import { USUAL_VIEW, drawScene, fitBlocks, fitHD, turned, zoomed } from './scene'
-import { cue, cueLeaving } from './sound'
-import type { Steering } from './steer'
+import { ENDING_TICKS, LEAVE_SECONDS, TICK_MS, progressStage, sceneFor } from './frame'
+import type { FrameState } from './frame'
+import { findMirror, panelShows, publish } from './mirror'
+import type { Mirror, Showing } from './mirror'
+import { cue, cueLeaving, showOnDashboard } from './sound'
 import { WORLDS } from './worlds'
 
-const PANE = 'probe'
+// The pane earlier versions drew the probe in beside the chat.
+const OLD_PANE = 'probe'
 
 const effort = atom({ plugin: 'pixel-probe', key: 'effort' } as const, null)
 const isWorking = atom({ plugin: 'pixel-probe', key: 'isWorking' } as const, false)
@@ -25,10 +24,7 @@ const mode = atom({ plugin: 'pixel-probe', key: 'mode' } as const, null)
 const pinned = atom({ plugin: 'pixel-probe', key: 'pinned' } as const, null)
 const world = atom({ plugin: 'pixel-probe', key: 'world' } as const, null)
 const craft = atom({ plugin: 'pixel-probe', key: 'craft' } as const, null)
-const hd = atom({ plugin: 'pixel-probe', key: 'hd' } as const, false)
-const hdDenied = atom({ plugin: 'pixel-probe', key: 'hdDenied' } as const, null)
 const labels = atom({ plugin: 'pixel-probe', key: 'labels' } as const, false)
-const view = atom({ plugin: 'pixel-probe', key: 'view' } as const, USUAL_VIEW)
 const helpers = atom({ plugin: 'pixel-probe', key: 'helpers' } as const, {})
 
 // How long an agent's craft takes to fly off, and how often the agents are
@@ -37,17 +33,6 @@ const LEAVE_TICKS = Math.ceil((LEAVE_SECONDS * 1000) / TICK_MS)
 const RECONCILE_TICKS = 50
 // Between turns the world turns on, slowly: a tick this often, not ten a second.
 const DRIFT_MS = 1000
-
-// The HD picture's height in pixels, its width as the pane's box has it,
-// scaled by the terminal to fill it: fine enough for the craft's panels and
-// the agents' names, and light enough to resend ten times a second. Each of
-// the scene's pixels is drawn CHUNK by CHUNK of them, so it still reads as
-// pixel art, only finer than the blocks.
-const HD_PIXELS = 384
-const CHUNK = 2
-// The waits before each probe of the HD picture: one not yet mounted gets the
-// next chance, and one refused every time never will be.
-const HD_PROBE_MS = [300, 700, 2000]
 
 const LEVELS: readonly unknown[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const SCENES: readonly unknown[] = ['orbit', 'survey', 'asteroid']
@@ -67,14 +52,9 @@ const craftOf = (name: string | null) => {
   return found < 0 ? undefined : found
 }
 
-const openPane = ($: EngineInterface) => $.ui.open({ id: PANE, title: 'Probe', rows: 36, columns: 66 })
-
-const isPaneShown = async ($: EngineInterface) =>
-  (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
-
 // The animation clock ticks ten times a second while Claude works, an
 // ending plays or an agent's craft flies; between, once a second, the world
-// turning slowly while the pane shows. Background agents outlive the turn.
+// turning slowly while the dashboard draws it. Background agents outlive the turn.
 let ticker: Timer | undefined
 let pace = 0
 let isTurnRunning = false
@@ -91,26 +71,30 @@ function tickEvery($: EngineInterface, ms: number) {
 const startTicking = ($: EngineInterface) => tickEvery($, TICK_MS)
 
 async function advance($: EngineInterface) {
-  if (pace === DRIFT_MS && !(await isPaneShown($))) return
+  if (pace === DRIFT_MS && shown !== 'probe') return
 
   const now = await update($, tick, n => n + 1)
   const crew = await update($, helpers, all => {
     const played = Object.entries(all).filter(([, helper]) => helper.left !== undefined && now - helper.left >= LEAVE_TICKS)
     return played.length === 0 ? all : Object.fromEntries(Object.entries(all).filter(([id]) => !played.some(([gone]) => gone === id)))
   })
+  // Writes made from a timer pass the mod's own hooks by, state.set's too, so
+  // the dashboard's panel is told of each tick here.
+  schedulePublish($)
   const count = Object.keys(crew).length
   if (count > 0 && now % RECONCILE_TICKS === 0) void reconcile($)
   if (isTurnRunning || now < animateUntil || count > 0) return
 
   // The target as it is now: a turn may have brought a fresh one meanwhile.
   await update($, target, current => (current.phase === 'ending' ? { ...current, phase: 'gone' as const, since: now } : current))
+  schedulePublish($)
   tickEvery($, DRIFT_MS)
 }
 
-// What the picture is drawn from, read in one go: the frame's state, and
-// what the caption tells besides. `isLive` where the picture moves; a still
-// picture is drawn without the tick.
-async function sceneState($: EngineInterface, isLive: boolean): Promise<{ state: FrameState; told: Told }> {
+// What the dashboard's picture is drawn from, read in one go: the frame's
+// state, and what the caption tells besides. The camera is the panel's own,
+// as its mouse turns it.
+async function sceneState($: EngineInterface): Promise<{ state: FrameState; told: Told }> {
   const level = await read($, effort)
   const working = await read($, isWorking)
   const state: FrameState = {
@@ -123,11 +107,56 @@ async function sceneState($: EngineInterface, isLive: boolean): Promise<{ state:
     world: await read($, world),
     craft: craftOf(await read($, craft)) ?? 0,
     isLabeled: await read($, labels),
-    view: await read($, view),
-    tick: isLive ? await read($, tick) : undefined,
+    tick: await read($, tick),
   }
 
   return { state, told: { level, seen: await read($, mode), working } }
+}
+
+// The dashboard's panel round the shell this session runs in (mirror.ts),
+// the only place the probe is drawn: where the two meet, what it shows while
+// it is up, and whether this session told it anything, to tell it as well
+// when the session ends.
+let mirror: Mirror | undefined
+let shown: Showing | undefined
+let isPublishing = false
+let hasPublished = false
+// The session ended, other than by a /clear: what the clock still does as the
+// process goes, an ending playing out, is not the panel's to see.
+let isOver = false
+// How often the panel is looked for.
+const PANEL_CHECK_MS = 2000
+
+// Each change to what the probe is doing reaches the panel while it draws
+// the probe, at most once a tick: every write of the mod's state asks for it
+// (the state.set hook), and those asking before it is made share it.
+function schedulePublish($: EngineInterface) {
+  if (mirror === undefined || shown !== 'probe' || isPublishing || isOver) return
+
+  isPublishing = true
+  $.clock.after(0, () => void publishScene($))
+}
+
+async function publishScene($: EngineInterface) {
+  isPublishing = false
+  const meeting = mirror
+  if (meeting === undefined || shown !== 'probe' || isOver) return
+
+  const { state, told } = await sceneState($)
+  hasPublished = true
+  await publish($, meeting, { v: 1, at: await $.clock.now(), state, told })
+}
+
+// The panel comes and goes, and what it shows changes: while it draws the
+// probe it hears each change, and the probe is heard.
+async function watchPanel($: EngineInterface) {
+  if (mirror === undefined) return
+
+  const now = await panelShows($, mirror)
+  if (now === shown) return
+  shown = now
+  showOnDashboard(now === 'probe')
+  if (now === 'probe') schedulePublish($)
 }
 
 // The agents this session spawned, by agent id: what kind each is, the craft
@@ -254,42 +283,29 @@ async function pin($: EngineInterface, scene: Scene | null) {
   await showScene($, scene ?? sceneFor(await read($, mode)))
 }
 
-// Whether the terminal shows the HD picture is known only once it is mounted:
-// a blit to it is refused where the terminal draws its alt text instead. Then
-// the probe goes back to blocks for this session, saying why.
-let isProbed = false
-
-function probeHD($: EngineInterface, source: ImageSource, attempt = 0) {
-  if (attempt === 0 && isProbed) return
-
-  isProbed = true
-  $.clock.after(HD_PROBE_MS[attempt] ?? 0, () => {
-    void $.ui.blit({ requestId: PANE, key: 'scene', source }).then(
-      async ({ deny }) => {
-        if (deny === undefined) return
-        if (attempt + 1 < HD_PROBE_MS.length) probeHD($, source, attempt + 1)
-        else await update($, hdDenied, () => deny)
-      },
-      () => undefined,
-    )
-  })
-}
-
 // /probe's words, and what each says once done.
 const ON_OFF = (asked: string, word: string) => asked === word || asked === `${word} on` || asked === `${word} off`
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    isOver = false
+    mirror = await findMirror($).catch(() => undefined)
     await $.command.register({
       name: 'probe',
       description:
-        'Show the probe beside the chat: /probe on|off, hd|blocks picks how it is drawn, orbit|survey|asteroid|follow the scene, ' +
+        "The probe on mc-rice's dashboard, in Steve's place once /steve off: /probe on|off, orbit|survey|asteroid|follow the scene, " +
         'moon|mars|earth|saturn|jupiter|neptune|pluto the world (effort: the effort picks it), juno|voyager|cassini|... the craft Claude flies, ' +
         'labels on|off names over the craft, sound on|off',
     })
     await update($, isWorking, () => false)
-    // A reload stops the clock, so an ending in flight finishes at once.
-    await update($, target, current => (current.phase === 'ending' ? { ...current, phase: 'gone' as const } : current))
+    // A reload, as a turn that saved the mod ends, drops the clock but keeps
+    // $.state: an ending in flight, the asteroid mid-shatter, plays on from
+    // where it was; one already played out is gone.
+    const now = await read($, tick)
+    const left = await read($, target)
+    const isEnding = left.phase === 'ending' && now < left.since + ENDING_TICKS[left.scene]
+    if (isEnding) animateUntil = left.since + ENDING_TICKS[left.scene]
+    else await update($, target, current => (current.phase === 'ending' ? { ...current, phase: 'gone' as const } : current))
 
     // Until the first request says otherwise, trust the saved setting.
     if ((await read($, effort)) === null) {
@@ -304,7 +320,6 @@ export const register: Register = on => {
     }
     const visits = toWorld(await $.store.get('world'))
     if (visits !== undefined) await update($, world, () => visits)
-    if ((await $.store.get('hd')) === true) await update($, hd, () => true)
     if ((await $.store.get('labels')) === true) await update($, labels, () => true)
     const flown = await $.store.get('craft')
     const flies = craftOf(typeof flown === 'string' ? flown : null)
@@ -314,11 +329,37 @@ export const register: Register = on => {
     agents.clear()
     await update($, helpers, () => ({}))
 
-    // The probe stays off across sessions once /probe off says so.
-    if ((await $.store.get('hidden')) !== true) void openPane($)
-    tickEvery($, DRIFT_MS)
+    // The dashboard's panel, up round this shell, draws the probe while it
+    // says so, once /probe on has it on: the store says that, where the
+    // panel reads it.
+    shown = mirror === undefined ? undefined : await panelShows($, mirror)
+    showOnDashboard(shown === 'probe')
+    if (mirror !== undefined) $.clock.every(PANEL_CHECK_MS, () => void watchPanel($))
+    // A pane an earlier version left up, as a reload keeps it, goes.
+    if ((await $.ui.panes()).some(pane => pane.id === OLD_PANE)) await $.ui.close({ id: OLD_PANE })
+    if (isEnding) startTicking($)
+    else tickEvery($, DRIFT_MS)
+    schedulePublish($)
 
     return next(e)
+  })
+
+  // The dashboard's panel, told about this session, hears that it is over.
+  // After a /clear Claude goes on, a fresh session that starts nothing, and
+  // the panel follows it.
+  on('session.end', async ($, e, next) => {
+    if (e.reason !== 'clear') {
+      isOver = true
+      if (mirror !== undefined && hasPublished) await publish($, mirror, { v: 1, ended: true })
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Every change to what the probe is doing reaches the dashboard's panel while it draws it.
+  on('state.set', { plugin: 'pixel-probe' }, async ($, e, next) => {
+    const written = await next(e)
+    schedulePublish($)
+    return written
   })
 
   // An agent started (a subagent, a teammate, a workflow's): its craft joins
@@ -387,79 +428,24 @@ export const register: Register = on => {
     }
     if (asked === 'off') {
       await $.store.set('hidden', true)
-      await $.ui.close({ id: PANE })
-      return { text: 'The probe is off, and stays off in new sessions: /probe on brings it back.' }
+      return { text: 'The probe is off the dashboard, and stays off in new sessions: /probe on brings it back.' }
     }
-    // Asked again, HD probes the terminal afresh.
-    if (asked === 'hd' || asked === 'blocks') {
-      await update($, hd, () => asked === 'hd')
-      await update($, hdDenied, () => null)
-      await $.store.set('hd', asked === 'hd')
-      isProbed = false
-    }
-    if (asked !== '' && asked !== 'on' && asked !== 'hd' && asked !== 'blocks') {
-      return { text: `/probe doesn't know "${asked}": try on, off, hd, blocks, orbit, survey, asteroid, follow, a world, a craft, labels or sound.` }
+    if (asked !== '' && asked !== 'on') {
+      return { text: `/probe doesn't know "${asked}": try on, off, orbit, survey, asteroid, follow, a world, a craft, labels or sound.` }
     }
 
+    // On, from now and in new sessions: the dashboard draws the probe in
+    // Steve's place, once whatever holds the place ahead of it lets it go.
     await $.store.set('hidden', false)
-    const opened = await openPane($)
     if (ticker === undefined) tickEvery($, DRIFT_MS)
-    if (!opened.isPlaced) return { text: `The probe is waiting: ${opened.reason}` }
+    await watchPanel($)
+    if (shown === undefined) return { text: "The probe is on: it shows only on mc-rice's dashboard, and none is round this shell." }
+    if (shown === 'probe' || shown === 'off') return { text: "The probe is on the dashboard, in Steve's place." }
 
-    return {
-      text:
-        asked === 'hd'
-          ? 'The probe draws in real pixels where this terminal can show them: /probe blocks goes back.'
-          : asked === 'blocks'
-            ? 'The probe draws in blocks: /probe hd tries real pixels.'
-            : 'The probe is beside the chat.',
-    }
-  })
-
-  // The wheel over the picture zooms about the pointer, a few ticks at most
-  // at a time, and scrolls nothing: the pane has nothing to scroll. Over the
-  // caption under it, or with no ticks to tell, it does nothing.
-  on('ui.scroll', { requestId: PANE }, async ($, e) => {
-    const { pointer } = e
-    const isOver =
-      pointer !== undefined && picture.columns > 0 && pointer.row >= 0 && pointer.row < picture.rows && pointer.column >= 0 && pointer.column < picture.columns
-    if ((pointer !== undefined && !isOver) || !Number.isFinite(e.by) || e.by === 0) return {}
-
-    const at: readonly [number, number] = isOver
-      ? [(pointer.column + 0.5) / picture.columns - 0.5, 0.5 - (pointer.row + 0.5) / picture.rows]
-      : [0, 0]
-    const ticks = Math.sign(e.by) * Math.min(3, Math.abs(e.by))
-    await update($, view, now => zoomed(now, ticks, at))
-    return {}
-  })
-
-  // A drag over the picture spins and tips the world from where it was when
-  // the drag began, its zoom as the wheel has it meanwhile; a right click puts
-  // it back as it was. Read and written in one step, so a post handled late
-  // can't undo a later one, and a finished or reset drag's stragglers are let go.
-  on('ui.message', async ($, e) => {
-    const said = e.requestId === PANE && e.element === STEER ? steeringOf(e.data) : undefined
-    if (said === undefined) return {}
-
-    if ('reset' in said) {
-      if (steering) finished = steering.n
-      steering = undefined
-      await update($, view, () => USUAL_VIEW)
-      return {}
-    }
-    const { n, across, down, isDone } = said.drag
-    if (n === finished) return {}
-
-    await update($, view, now => {
-      if (steering?.n !== n) steering = { n, from: now }
-      const { spin, tip } = turned(steering.from, across, down)
-      return { ...now, spin, tip }
-    })
-    if (isDone) {
-      finished = n
-      steering = undefined
-    }
-    return {}
+    // Jarvis has the place ahead of Steve, who may be on behind him.
+    const holder = `${shown.charAt(0).toUpperCase()}${shown.slice(1)}`
+    const frees = shown === 'jarvis' ? '/jarvis off and /steve off' : `/${shown} off`
+    return { text: `${holder} has the dashboard's panel: ${frees}, and the probe takes over.` }
   })
 
   // `/effort max` swaps the world right away instead of on the next request.
@@ -556,78 +542,6 @@ export const register: Register = on => {
 
     return next(e)
   })
-
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    // The terminal animates; other surfaces draw a still picture.
-    const isLive = e.surface === 'terminal'
-    const { state, told } = await sceneState($, isLive)
-    const frame = toFrame(state)
-    const denied = await read($, hdDenied)
-    const { name, color, alt, caption } = describe(frame, { ...told, denied: isLive ? denied : null })
-
-    if (e.surface === 'terminal') {
-      const { Box, Client, Image, Raster, Text } = $.ui.resolve(e)
-      // The pointer over the picture turns the view (steer.ts), laid over it.
-      const steered = (columns: number, rows: number) => {
-        picture = { columns, rows }
-        return (
-          <Box position="absolute" top={0} left={0}>
-            <Client key={STEER} module="./steer.ts" width={columns} height={rows} />
-          </Box>
-        )
-      }
-      const label = (
-        <Text weight="bold" color={color}>
-          {name}
-        </Text>
-      )
-
-      if ((await read($, hd)) && denied === null) {
-        const box = fitHD(e.props.bodyColumns, e.props.scroll.bodyRows, HD_PIXELS)
-        const [width, height] = [Math.ceil(box.width / CHUNK), Math.ceil(box.height / CHUNK)]
-        const source = { rgba: toRgba(drawScene(frame, width, height), CHUNK), width: width * CHUNK, height: height * CHUNK }
-        probeHD($, source)
-
-        return (
-          <Box flexDirection="column">
-            <Box>
-              <Image key="scene" source={source} columns={box.columns} rows={box.rows} alt={alt} />
-              {steered(box.columns, box.rows)}
-            </Box>
-            {label}
-            <Text dimColor>{caption}</Text>
-          </Box>
-        )
-      }
-
-      const { width, height } = fitBlocks(e.props.bodyColumns, e.props.scroll.bodyRows)
-      const pixels = drawScene(frame, width, height)
-      const cells = cellsOf(pixels)
-
-      return (
-        <Box flexDirection="column">
-          <Box>
-            <Raster key="scene" columns={cells.columns} rows={cells.rows} cells={toCells(pixels)} />
-            {steered(cells.columns, cells.rows)}
-          </Box>
-          {label}
-          <Text dimColor>{caption}</Text>
-        </Box>
-      )
-    }
-
-    const { Box, Svg, Text } = $.ui.resolve(e)
-
-    return (
-      <Box flexDirection="column">
-        <Svg source={svgOf(frame, 128)} alt={alt} width={192} height={192} />
-        <Text weight="bold" color={color}>
-          {name}
-        </Text>
-        <Text dimColor>{caption}</Text>
-      </Box>
-    )
-  })
 }
 
 // Every agent on screen flying the craft Claude now flies takes another.
@@ -648,39 +562,6 @@ async function recast($: EngineInterface) {
       }),
     ),
   )
-}
-
-// The overlay turning the view (steer.ts), the cells of the picture it lies
-// on as last drawn, which the wheel's pointer is read against, and the drag
-// under way: its number and the view as it was when it began.
-const STEER = 'steer'
-let picture = { columns: 0, rows: 0 }
-let steering: { n: number; from: View } | undefined
-// The last drag finished or reset: a post of it handled after that changes nothing.
-let finished: number | undefined
-
-// What the overlay posted, if it is what it posts.
-function steeringOf(data: unknown): Steering | undefined {
-  if (typeof data !== 'object' || data === null) return undefined
-  if ('reset' in data && data.reset === true) return { reset: true }
-  if (!('drag' in data) || typeof data.drag !== 'object' || data.drag === null) return undefined
-
-  const { n, across, down, isDone } = data.drag as Record<string, unknown>
-  return typeof n === 'number' && typeof across === 'number' && typeof down === 'number' && typeof isDone === 'boolean'
-    ? { drag: { n, across, down, isDone } }
-    : undefined
-}
-
-// The picture as SVG for the surfaces that draw it, its colors rounded so
-// the nebula makes long runs, drawn smaller until it fits what an Svg may hold.
-function svgOf(frame: Frame, size: number): string {
-  let svg = toSvg(drawScene(frame, size), 12)
-  for (let smaller = size; svg.length > SVG_LIMIT && smaller > 32; ) {
-    smaller = Math.floor((smaller * 3) / 4)
-    svg = toSvg(drawScene(frame, smaller - (smaller % 2)), 16)
-  }
-
-  return svg
 }
 
 type TaskIds = Tasks['ids']

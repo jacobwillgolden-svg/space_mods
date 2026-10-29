@@ -11,7 +11,7 @@ import numpy as np
 
 RATE = 22050
 OUT = Path(__file__).resolve().parent.parent / 'sounds'
-# Every clip peaks this loud: a pane beside the chat, not an alarm.
+# Every clip peaks this loud: a picture on the dashboard, not an alarm.
 PEAK = 0.45
 
 

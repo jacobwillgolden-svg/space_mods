@@ -22,9 +22,9 @@ export type Target = { phase: 'whole' | 'ending' | 'gone'; since: number; scene:
 export type Helper = { name: string; craft: number; type: string; since: number; left?: number }
 
 // How the person has turned and zoomed the view, by dragging and scrolling
-// over the picture: radians the world is spun round its axis and its orbits
-// tipped toward the eye, how many times nearer, and where it looks off the
-// middle, in fractions of the usual view.
+// over the dashboard's picture: radians the world is spun round its axis and
+// its orbits tipped toward the eye, how many times nearer, and where it looks
+// off the middle, in fractions of the usual view.
 export type View = { spin: number; tip: number; zoom: number; pan: readonly [number, number] }
 
 declare module 'claude-code' {
@@ -44,14 +44,8 @@ declare module 'claude-code' {
       world: WorldName | null
       // The craft Claude flies (/probe voyager), by name; Juno when null.
       craft: string | null
-      // Drawn in real pixels (/probe hd), where the terminal can show them.
-      hd: boolean
-      // Why this terminal shows no HD picture, once a blit to it was refused.
-      hdDenied: string | null
       // Names over the agents' craft (/probe labels on); off until asked.
       labels: boolean
-      // The view as the person turned and zoomed it this session.
-      view: View
       // The agents flying beside the probe, by agent id.
       helpers: Record<string, Helper>
     }

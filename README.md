@@ -4,13 +4,15 @@ Space for Claude Code, in pixels. Every planet, moon, ring, spacecraft and
 star here is drawn in code a pixel at a time: no textures, no photos, no
 recordings.
 
-![The probe's pane: Jupiter, a survey of Saturn, agents' craft round Earth, a comet mined](docs/pane.png)
+![The probe: Jupiter, a survey of Saturn, agents' craft round Earth, a comet mined](docs/pane.png)
 
 ## pixel-probe
 
-A probe beside the chat, orbiting a world while Claude works. It is a
-Claude Code mod: a pane of function hooks, drawn in half-block pixels or, with
-`/probe hd`, in real ones where the terminal shows images.
+A probe orbiting a world while Claude works. It is a Claude Code mod of
+function hooks, the back end of what mc-rice's dashboard (`claude_mods/mc-rice`)
+draws in Steve's place once `/steve off` and `/probe on` give it the place
+(`hooks/mirror.ts`, mc-rice's `tools/probe-frames.ts`). Nothing is drawn
+beside the chat: with no dashboard round the shell, the probe shows nowhere.
 
 **The effort level picks the world.** The harder Claude thinks, the bigger the
 world, each with its own moons:
@@ -46,8 +48,7 @@ about the pointer; right-click to put it back.
 
 | `/probe ...` | |
 | --- | --- |
-| `on`, `off` | show or hide the pane, kept across sessions |
-| `hd`, `blocks` | real pixels where the terminal can show them, or half blocks |
+| `on`, `off` | the probe in the dashboard's place, or off it, kept across sessions |
 | `orbit`, `survey`, `asteroid`, `follow` | keep a scene whatever the mode, or follow the mode again |
 | `jupiter`, `saturn`, ... `effort` | keep a world whatever the effort, or let the effort pick again |
 | `juno`, `voyager`, `cassini`, ... | the craft Claude flies (Juno unless asked) |
@@ -90,7 +91,7 @@ or `kitten @ set-background-image` for the window you are in.
 
 ## Panoramas
 
-`panoramas/` holds three nebulae, and each scene's sky in the pane is drawn in
+`panoramas/` holds three nebulae, and each scene's sky is drawn in
 one's colors:
 
 - `violet.jpg`: blue and violet, behind the orbit

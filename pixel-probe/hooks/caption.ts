@@ -1,28 +1,19 @@
 import type { Effort } from '../types'
-import { CRAFT } from './craft'
 import type { Frame } from './frame'
 
 // What the caption tells besides the frame: the effort as Claude last sent
-// it, the permission mode last seen, whether Claude works, and why this
-// terminal draws no HD picture, when that is to be shown.
-export type Told = { level: Effort | null; seen: string | null; working: boolean; denied?: string | null }
+// it, the permission mode last seen, and whether Claude works.
+export type Told = { level: Effort | null; seen: string | null; working: boolean }
 
-// The words under the picture: the world's name and its color, the
-// picture's alt text, and the caption.
-export type Words = { name: string; color: string; alt: string; caption: string }
+// The words the dashboard's panel puts under the picture: the world's name
+// and its color, and the caption.
+export type Words = { name: string; color: string; caption: string }
 
 export function describe(frame: Frame, told: Told): Words {
-  const { level, seen, working, denied } = told
+  const { level, seen, working } = told
   const flying = frame.crew.filter(hand => hand.left === undefined)
-  const craft = CRAFT[frame.craft]?.name ?? 'The probe'
   const { title } = frame.world
   const name = title.charAt(0).toUpperCase() + title.slice(1)
-  const alt =
-    frame.scene === 'asteroid'
-      ? `${craft} mining ${article(frame.rock.name)} near ${title}`
-      : frame.scene === 'survey'
-        ? `${craft} surveying ${title}`
-        : `${craft} orbiting ${title}`
   const caption = [
     level === null
       ? 'effort: shows on the next turn'
@@ -32,13 +23,10 @@ export function describe(frame: Frame, told: Told): Words {
     ...(seen === null ? [] : [`${seen} mode`]),
     statusOf(frame, working),
     ...(flying.length === 0 ? [] : [crewOf(flying.map(hand => hand.name))]),
-    ...(denied === undefined || denied === null ? [] : [`HD off here: ${denied}`]),
   ].join(' · ')
 
-  return { name, color: frame.world.color, alt, caption }
+  return { name, color: frame.world.color, caption }
 }
-
-const article = (noun: string) => (/^[aeiou]/i.test(noun) ? `an ${noun}` : `a ${noun}`)
 
 // The agents' craft, named, cut short past forty characters.
 function crewOf(names: readonly string[]): string {

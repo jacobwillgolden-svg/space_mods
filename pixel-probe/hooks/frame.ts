@@ -64,9 +64,10 @@ export type FrameState = {
   // A world kept with /probe, whatever the effort.
   world: WorldName | null
   craft: number
-  // Undefined where the surface draws a still picture.
+  // Undefined for a still picture, as the dashboard draws the probe waiting.
   tick: number | undefined
   isLabeled?: boolean
+  // The dashboard's camera, as its mouse turned it; the usual when absent.
   view?: View
 }
 
