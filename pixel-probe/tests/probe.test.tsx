@@ -2,6 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On, TurnStepInput } from 'claude-code'
 
+import { moveOf } from '../hooks/apollo'
 import { describe } from '../hooks/caption'
 import type { Told, Words } from '../hooks/caption'
 import { CRAFT } from '../hooks/craft'
@@ -298,6 +299,156 @@ test('the harder Claude thinks, the tougher the asteroid', async ($, on) => {
   }
 })
 
+test('/probe apollo flies Apollo 11 each turn: off the pad, out as far as the turn gets, into lunar orbit as Claude stops', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  expect((await probe($, 'apollo')).text).toBe(
+    'The probe will fly Apollo 11 to the Moon whatever the mode: each turn launches, a commit lands Eagle, a push puts Neil on the Moon.',
+  )
+
+  await prompt($, 'default')
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await shown(seen, /^Apollo 11$/)
+  await shown(seen, /ignition/)
+  await seen.clock.advance(2000)
+  await shown(seen, /liftoff/)
+
+  // Docked by 25.5 seconds in, then out toward the Moon as the turn gets on.
+  await work($, 8)
+  await seen.clock.advance(30_000)
+  await shown(seen, /translunar coast · \d+,000 km$/)
+  const out = (await lastTold(seen)).state.flown ?? 0
+  expect(out).toBeGreaterThan(0.5)
+  await work($, 8)
+  await seen.clock.advance(3000)
+  expect((await lastTold(seen)).state.flown ?? 0).toBeGreaterThan(out)
+
+  await stop($, 'default')
+  await complete($, 't1')
+  await seen.clock.advance(ENDING_TICKS.apollo * TICK_MS + 200)
+  await shown(seen, /lunar orbit · a commit lands Eagle/)
+
+  // Nothing committed or pushed: the next turn launches again.
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  await shown(seen, /ignition/)
+})
+
+test('a commit lands Eagle at Tranquility Base, the next turn goes on from the Moon, and a push puts Neil on it to plant the flag', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await probe($, 'apollo')
+  await $.turn.start({ text: 'commit it', turnId: 't1' })
+  await seen.clock.advance(26_000)
+  await $.tool.call({ tool: 'Bash', command: 'git add -A && git commit -m "Fix the shatter"' })
+  await seen.clock.advance(500)
+  await shown(seen, /translunar coast · \d+,000 km · go for landing/)
+
+  await stop($, 'default')
+  await complete($, 't1')
+  await seen.clock.advance(20_000)
+  await shown(seen, /the Eagle has landed · a push for the moonwalk/)
+
+  // The next turn goes on from the Moon, where a push puts Neil on it.
+  await $.turn.start({ text: 'push it', turnId: 't2' })
+  await shown(seen, /Tranquility Base · EVA prep \d+%/)
+  await $.tool.call({ tool: 'Bash', command: 'git push origin main' })
+  await seen.clock.advance(6500)
+  await shown(seen, /one small step for man, one giant leap for mankind/)
+  await seen.clock.advance(7000)
+  await shown(seen, /the flag at Tranquility Base/)
+
+  // The flag up, the mission done: the next turn launches another.
+  await stop($, 'default')
+  await complete($, 't2')
+  await seen.clock.advance(1000)
+  await shown(seen, /the flag at Tranquility Base/)
+  await $.turn.start({ text: 'next', turnId: 't3' })
+  await shown(seen, /ignition/)
+})
+
+test('a push alone lands Eagle and puts Neil on the Moon in the same turn, and a turn on the Moon without one starts over', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await probe($, 'apollo')
+  await $.turn.start({ text: 'ship it', turnId: 't1' })
+  await seen.clock.advance(26_000)
+  await $.tool.call({ tool: 'Bash', command: 'git log --grep commit' })
+  await seen.clock.advance(200)
+  await shown(seen, /translunar coast · \d+,000 km$/)
+  await $.tool.call({ tool: 'PowerShell', command: 'git push' })
+  await seen.clock.advance(200)
+  await shown(seen, /go for EVA/)
+
+  await stop($, 'default')
+  await complete($, 't1')
+  await seen.clock.advance(32_000)
+  await shown(seen, /the flag at Tranquility Base/)
+
+  // A commit alone, then a turn on the Moon with neither: the one after launches again.
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  await shown(seen, /ignition/)
+  await $.tool.call({ tool: 'Bash', command: 'git commit -am wip' })
+  await stop($, 'default')
+  await complete($, 't2')
+  await seen.clock.advance(20_000)
+  await $.turn.start({ text: 'a question', turnId: 't3' })
+  await shown(seen, /Tranquility Base · EVA prep/)
+  await stop($, 'default')
+  await complete($, 't3')
+  await $.turn.start({ text: 'another', turnId: 't4' })
+  await shown(seen, /ignition/)
+})
+
+test('a commit or pull request lands Eagle; a push or merge puts Neil on the Moon; nothing else does', () => {
+  expect(moveOf('git commit -m "x"')).toBe('land')
+  expect(moveOf('git add -A && git commit -q -F - <<EOF')).toBe('land')
+  expect(moveOf('git -C pixel-probe commit -am x')).toBe('land')
+  expect(moveOf('gh pr create --fill')).toBe('land')
+  expect(moveOf('git push origin main')).toBe('step')
+  expect(moveOf('cd repo; git merge feature')).toBe('step')
+  expect(moveOf('gh pr merge 12 --squash')).toBe('step')
+  expect(moveOf('git log --grep commit')).toBeUndefined()
+  expect(moveOf('git commit-tree abc')).toBeUndefined()
+  expect(moveOf('echo push')).toBeUndefined()
+})
+
+// Apollo 11 `tick` tenths of a second into a mission launched at 0, as `target` has it.
+const flying = (tick: number | undefined, target: Partial<FrameState['target']> = {}, flown = 0.5): FrameState => ({
+  effort: 'high',
+  working: true,
+  work: 6,
+  tasks: null,
+  target: { phase: 'whole', since: 0, scene: 'apollo', born: 0, ...target },
+  helpers: {},
+  world: null,
+  craft: 0,
+  tick,
+  flown,
+})
+
+const flightOf = (tick: number, target: Partial<FrameState['target']> = {}) => toFrame(flying(tick, target))
+
+test('Apollo 11 draws at every part of its flight, the same each time', { timeoutMs: 60_000 }, () => {
+  const ended = { phase: 'ending' as const, since: 600, ended: 600 }
+  const frames = [
+    ...[5, 30, 60, 100, 140].map(tick => flightOf(tick)),
+    ...[160, 200, 240].map(tick => flightOf(tick)),
+    flightOf(400),
+    ...[620, 660, 700].map(tick => flightOf(tick, ended)),
+    ...[690, 760, 800].map(tick => flightOf(tick, { ...ended, landed: 300, acted: 300 })),
+    ...[790, 850, 920, 980].map(tick => flightOf(tick, { ...ended, landed: 300, stepped: 300, acted: 300 })),
+    flightOf(1100, { since: 1000, turn: 1000, landed: 300, acted: 300 }),
+  ]
+  for (const frame of frames) {
+    const first = drawScene(frame, 66, 64)
+    expect(first.color.length).toBe(66 * 64)
+    expect(drawScene(frame, 66, 64).color).toEqual(first.color)
+  }
+  // A still picture, as the dashboard draws Apollo waiting: on the pad.
+  const still = toFrame(flying(undefined))
+  expect(describe(still, { level: 'high', seen: null, working: false }).caption).toBe('ignition · all engines running')
+})
+
 test('a mode change mid-turn swaps the scene at once', async ($, on) => {
   const seen = engine(on, { effortLevel: 'high' })
   await start($)
@@ -543,7 +694,7 @@ const frameOf = (scene: Scene, world: WorldName, effort: Effort = 'high', more: 
 // Each world's face and each sky is made the first time it is drawn at a size, a moment's work each.
 test('every world draws in every scene, the same each time', { timeoutMs: 30_000 }, () => {
   for (const world of Object.keys(WORLDS) as WorldName[]) {
-    for (const scene of ['orbit', 'survey', 'asteroid'] as const) {
+    for (const scene of ['orbit', 'survey', 'asteroid', 'apollo'] as const) {
       const first = drawScene(frameOf(scene, world), 66, 64)
       expect(first.color.length).toBe(66 * 64)
       expect(drawScene(frameOf(scene, world), 66, 64).color).toEqual(first.color)
@@ -679,4 +830,33 @@ test("after /clear Claude goes on, and so does the dashboard's panel; after an e
   await $.session.end({ reason: 'prompt_input_exit', sessionId: 's2', resume: { id: 's2' } })
   await seen.clock.advance(1000)
   expect(seen.written.at(-1)).toEqual({ v: 1, ended: true })
+})
+
+test("after /resume Claude goes on with the resumed session, and so does the dashboard's panel", async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await seen.clock.advance(300)
+
+  // The fresh session gives way to the resumed one, in the same process.
+  await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } })
+  await seen.clock.advance(300)
+  expect(seen.written.some(one => one.ended)).toBe(false)
+
+  await $.turn.start({ text: 'back again', turnId: 't2' })
+  await seen.clock.advance(300)
+  expect(seen.written.at(-1)?.state).toBeDefined()
+})
+
+test('a turn after the session was said to end tells the panel again', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await seen.clock.advance(300)
+  await $.session.end({ reason: 'other', sessionId: 's1', resume: { id: 's1' } })
+  await seen.clock.advance(300)
+  expect(seen.written.at(-1)).toEqual({ v: 1, ended: true })
+
+  await $.turn.start({ text: 'still here', turnId: 't1' })
+  await seen.clock.advance(300)
+  expect(seen.written.at(-1)?.state).toBeDefined()
 })

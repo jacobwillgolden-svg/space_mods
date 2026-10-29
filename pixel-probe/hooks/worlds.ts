@@ -10,8 +10,10 @@ import { mix, shade } from './pixels'
 export type Surface = 'gas' | 'rock' | 'ocean' | 'dwarf'
 
 // A storm on a gas giant, an oval of `across` by `tall` radians, its color
-// fading to `rim` at the edge; `lat` and `lon` in radians.
-export type Storm = { lat: number; lon: number; across: number; tall: number; color: number; rim: number }
+// fading to `rim` at the edge; `lat` and `lon` in radians. One that `turns`
+// (Jupiter's Great Red Spot), seconds a turn, is drawn live as it turns
+// rather than laid in the world's face.
+export type Storm = { lat: number; lon: number; across: number; tall: number; color: number; rim: number; turns?: number }
 
 // One band of a ring system, from and to so many of the world's radii.
 export type Ring = { from: number; to: number; color: number; alpha: number }
@@ -141,7 +143,8 @@ export const WORLDS: Record<WorldName, World> = {
       0xa86e48, 0x8f5d3e, 0xe6d8c2, 0xb49a7a, 0xd2c3aa, 0x9aa0a4, 0x7d8790,
     ],
     storms: [
-      { lat: deg(-22), lon: 1.1, across: 0.3, tall: 0.11, color: 0xc0583a, rim: 0xe9c9a2 },
+      // The Great Red Spot, 16,000 km by 11,000 at 22° south, turning counterclockwise.
+      { lat: deg(-22), lon: 1.1, across: 0.24, tall: 0.165, color: 0xc0583a, rim: 0xe9c9a2, turns: 40 },
       { lat: deg(-33), lon: -0.6, across: 0.09, tall: 0.05, color: 0xf4f0e8, rim: 0xcbb69a },
       { lat: deg(-36), lon: 2.6, across: 0.07, tall: 0.04, color: 0xf4f0e8, rim: 0xcbb69a },
       { lat: deg(18), lon: -2.0, across: 0.08, tall: 0.04, color: 0x6e4a36, rim: 0xb08a68 },
@@ -289,6 +292,7 @@ function gasAt(world: World, [x, y, z]: Point, lat: number, lon: number): number
   color = shade(color, 0.93 + 0.14 * noise3(x * 12, y * 30, z * 12, seed + 2))
 
   for (const storm of world.storms) {
+    if (storm.turns !== undefined) continue
     const across = (apart(lon, storm.lon) * Math.cos(lat)) / storm.across
     const tall = (lat - storm.lat) / storm.tall
     const d = Math.hypot(across, tall) + 0.15 * eddy
@@ -297,6 +301,41 @@ function gasAt(world: World, [x, y, z]: Point, lat: number, lon: number): number
   }
 
   return color
+}
+
+// A storm that turns, over `color` at (lat, lon) `time` seconds in: the
+// Great Red Spot, an anticyclone, so turning counterclockwise in the south,
+// its clouds wound in two arms round a calmer, deeper red heart; a pale
+// collar round it, the Red Spot Hollow; and the turbulent wake it trails
+// to the west, white eddies torn through the brown belt to its north.
+export function turningAt(storm: Storm, lat: number, lon: number, time: number, color: number): number {
+  const across = (apart(lon, storm.lon) * Math.cos(lat)) / storm.across
+  const tall = (lat - storm.lat) / storm.tall
+  if (across > 1.6 || across < -3.6 || tall > 2.2 || tall < -1.6) return color
+
+  const d = Math.hypot(across, tall)
+  const turned = Math.atan2(tall, across) - (2 * Math.PI * time) / (storm.turns ?? Infinity)
+  if (d < 1) {
+    // The arms wind tighter toward the heart, and fade into it.
+    const arm = 0.5 + 0.5 * Math.sin(2 * turned + 7.5 * d)
+    const wound = smooth(0.15, 0.55, d) * (1 - smooth(0.85, 1, d))
+    let spot = mix(shade(storm.color, 0.82), storm.color, smooth(0.1, 0.6, d))
+    spot = mix(spot, mix(shade(storm.color, 0.72), mix(storm.color, storm.rim, 0.55), arm), wound * 0.85)
+    return mix(spot, storm.rim, smooth(0.78, 1, d) * 0.75)
+  }
+  if (d < 1.45) {
+    // The collar's own streaks run round it with the wind.
+    const streak = 0.5 + 0.5 * Math.sin(3 * turned + 11 * d)
+    const collar = mix(storm.rim, 0xf6efe2, streak * 0.5)
+    return mix(collar, color, smooth(1.1, 1.45, d))
+  }
+  // The wake: west of the spot and up into the belt, fading the further it trails.
+  if (across > -0.6 || tall < -0.5) return color
+  const trail = smooth(-3.6, -1.2, across) * smooth(-0.5, 0.2, tall) * (1 - smooth(1.2, 2.2, tall))
+  const [x, y, z] = [Math.cos(lat) * Math.sin(lon), Math.sin(lat), Math.cos(lat) * Math.cos(lon)]
+  // Streaked along the latitudes, as the winds shear them.
+  const eddy = fbm3(x * 9 + time * 0.01, y * 46, z * 9, 977, 3)
+  return mix(color, eddy > 0.57 ? 0xf2e8d6 : eddy < 0.4 ? 0x86563a : color, trail * 0.7)
 }
 
 // Seas shading to shallows at the coasts, land green, dry or cold by

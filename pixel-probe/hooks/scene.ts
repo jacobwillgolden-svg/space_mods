@@ -1,4 +1,5 @@
 import type { View } from '../types'
+import { drawApollo } from './apollo'
 import { CRAFT, drawCraft } from './craft'
 import type { Pose } from './craft'
 import { drawText, textWidth } from './font'
@@ -9,7 +10,7 @@ import { blend, canvas, dither, glow, mix, put, shade } from './pixels'
 import type { Canvas } from './pixels'
 import { drawRock } from './rock'
 import { SKIES, drawSky } from './sky'
-import { chartOf, moonChartOf } from './worlds'
+import { chartOf, moonChartOf, turningAt } from './worlds'
 import type { Chart, Moon, World } from './worlds'
 
 // A small scene of spheres seen from far off, so straight on: the world in
@@ -108,10 +109,12 @@ const chartWidth = (radius: number, most: number) => clamp(2 ** Math.ceil(Math.l
 // screen column `until`, the beam's line at `beam`, in the scene's color.
 type Survey = { until: number; beam?: number; grid: number; accent: number }
 
-function drawWorld(c: Canvas, world: World, at: { x: number; y: number; r: number }, turn: Turn, spin: number, moons: readonly Ball[], levels: number, survey?: Survey) {
+function drawWorld(c: Canvas, world: World, at: { x: number; y: number; r: number }, turn: Turn, spin: number, time: number, moons: readonly Ball[], levels: number, survey?: Survey) {
   const { x: cx, y: cy, r: R } = at
   const chart = chartOf(world, chartWidth(R, 256))
   const rings = world.rings.length > 0 ? { normal: toEye(turn, [0, 1, 0]), world } : undefined
+  // Storms that turn are drawn live, finer than the face's texels.
+  const turning = world.storms.filter(storm => storm.turns !== undefined)
   // The grid's lines every thirty degrees, about a pixel wide.
   const step = Math.PI / 6
   const line = 0.6 / Math.max(4, R)
@@ -129,6 +132,7 @@ function drawWorld(c: Canvas, world: World, at: { x: number; y: number; r: numbe
       const lat = Math.asin(clamp(by, -1, 1))
       const lon = Math.atan2(bx, bz) - spin
       let color = look(chart, lat, lon)
+      for (const storm of turning) color = turningAt(storm, lat, lon, time, color)
       if (chart.clouds) color = mix(color, 0xf4f6fa, look(chart, lat, lon - spin * 0.25, 'clouds'))
       if (world.atmosphere) color = mix(color, world.atmosphere.color, (1 - nz) ** 2 * world.atmosphere.strength)
 
@@ -278,6 +282,11 @@ export function drawScene(frame: Frame, width: number, height = width, backdrop?
   const unit = Math.min(width, height)
   // Finer shading, and names, where the picture has the pixels for them.
   const levels = unit >= 200 ? 7 : 4
+  // Apollo 11 is a film of its own, framed shot by shot.
+  if (frame.mission) {
+    drawApollo(c, frame.mission, frame.time, levels)
+    return c
+  }
   const place = (x: number, y: number): [number, number] => [
     width / 2 + (x - width / 2 - view.pan[0] * width) * zoom,
     height / 2 + (y - height / 2 + view.pan[1] * height) * zoom,
@@ -336,7 +345,7 @@ export function drawScene(frame: Frame, width: number, height = width, backdrop?
     ...(frame.working ? { thrust: { dx: -forward[0], dy: forward[1], power: scene === 'orbit' ? 1 : 0.4 } } : {}),
   }
 
-  drawWorld(c, world, at, turn, spin, balls, levels, surveyOf(frame, at, sky.accent))
+  drawWorld(c, world, at, turn, spin, frame.time, balls, levels, surveyOf(frame, at, sky.accent))
   for (const { moon, angle, ball } of moons) drawMoon(c, moon, ball, angle, at, turn, [planet, ...balls], levels)
 
   const rock = { x: rockX, y: ry, z: 2 * R, radius: rockRadius, turn: frame.clock * 0.3, light: LIGHT }

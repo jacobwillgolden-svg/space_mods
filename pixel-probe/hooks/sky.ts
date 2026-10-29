@@ -5,13 +5,15 @@ import type { Canvas } from './pixels'
 
 // The sky behind each scene, a dim nebula over the dark after one of the
 // repo's panoramas (panoramas/), and the color the scene draws its own
-// light in: the charted orbit, the survey's beam, the mining laser.
+// light in: the charted orbit, the survey's beam, the mining laser, Apollo's
+// way to the Moon. Apollo's sky has no nebula, only black and the stars.
 export type Sky = { panorama: string; dark: number; clouds: readonly number[]; accent: number; seed: number }
 
 export const SKIES: Record<Scene, Sky> = {
   orbit: { panorama: 'violet', dark: 0x04051a, clouds: [0x1f4fb0, 0x2a9ad8, 0x6a3ab8, 0xa46ad8], accent: 0x7fd4ff, seed: 101 },
   survey: { panorama: 'orion', dark: 0x090509, clouds: [0xb04a72, 0xc8744c, 0x2a6e72, 0xd8b896], accent: 0x8ff0d8, seed: 211 },
   asteroid: { panorama: 'ember', dark: 0x080303, clouds: [0x9a1c16, 0xd8402e, 0xb89a78, 0x5a0e0e], accent: 0xff5a4a, seed: 307 },
+  apollo: { panorama: 'black', dark: 0x000000, clouds: [], accent: 0x9fd8ff, seed: 409 },
 }
 
 // A sky as made for one size: its colors, and the stars bright enough to twinkle.
@@ -45,8 +47,8 @@ function paint(sky: Sky, width: number, height: number): Painted {
   const step = Math.max(1, Math.round(unit / 96))
   const across = Math.ceil(width / step) + 1
   const down = Math.ceil(height / step) + 1
-  const nebula = new Uint32Array(across * down)
-  for (let gy = 0; gy < down; gy++) {
+  const nebula = new Uint32Array(across * down).fill(sky.dark)
+  for (let gy = 0; gy < down && sky.clouds.length > 1; gy++) {
     for (let gx = 0; gx < across; gx++) {
       const [u, v] = [((gx * step) / unit) * 2.2, ((gy * step) / unit) * 2.2]
       // Wisps where the noise folds over on itself, as the panoramas' filaments do.

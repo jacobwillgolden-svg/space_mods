@@ -17,6 +17,8 @@ const SCENES: Record<Scene, Record<Moment, Cue>> = {
   orbit: { arrive: [['blip', 0]], stage: [['tick', 0]], end: [['chime', 0]] },
   survey: { arrive: [['scan', 0]], stage: [['chirp', 0]], end: [['ping', 0]] },
   asteroid: { arrive: [['rumble', 0]], stage: [['zap', 0]], end: [['boom', 0]] },
+  // Liftoff, a blip a stage of the way out, and a chime into lunar orbit.
+  apollo: { arrive: [['rumble', 0]], stage: [['blip', 0]], end: [['chime', 0]] },
 }
 
 // Whether the dashboard's panel round this session's shell draws the probe

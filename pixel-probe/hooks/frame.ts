@@ -1,4 +1,6 @@
 import type { Effort, Helper, Scene, Target, Tasks, View, WorldName } from '../types'
+import { DOCKED, EVA, IN_ORBIT, LAND } from './apollo'
+import type { Mission } from './apollo'
 import { CRAFT } from './craft'
 import { ROCKS } from './rock'
 import type { Rock } from './rock'
@@ -9,12 +11,49 @@ import type { World } from './worlds'
 export const TICK_MS = 100
 
 // How long a new target takes to arrive: the probe comes round onto its
-// orbit or into place to survey, the asteroid drifts in.
-export const ARRIVE_TICKS: Record<Scene, number> = { orbit: 10, survey: 8, asteroid: 14 }
+// orbit or into place to survey, the asteroid drifts in; Apollo 11 times its
+// own launch (apollo.ts).
+export const ARRIVE_TICKS: Record<Scene, number> = { orbit: 10, survey: 8, asteroid: 14, apollo: 10 }
 
 // How long each ending plays: the orbit closes and the probe signals home,
-// the survey's map flashes complete, the asteroid shatters.
-export const ENDING_TICKS: Record<Scene, number> = { orbit: 16, survey: 14, asteroid: 22 }
+// the survey's map flashes complete, the asteroid shatters; Apollo 11 makes
+// lunar orbit, and more on a commit or a push (endingTicksOf).
+export const ENDING_TICKS: Record<Scene, number> = { orbit: 16, survey: 14, asteroid: 22, apollo: Math.ceil((IN_ORBIT * 1000) / TICK_MS) }
+
+const ticksOf = (seconds: number) => Math.ceil((seconds * 1000) / TICK_MS)
+
+// Whether Apollo 11's turn began with Eagle already on the Moon: a commit
+// came in an earlier turn.
+export const isOnTheMoon = (target: Target) => target.landed !== undefined && target.landed < (target.turn ?? target.born)
+
+// When Apollo 11's last moves begin, in ticks: the arrival at the Moon once
+// Claude stops; Eagle's landing once a commit has come and Apollo is in
+// lunar orbit; the moonwalk once a push has come and Eagle is down; and
+// `over`, when all of it is still.
+export type Beats = { arrive?: number; land?: number; step?: number; over: number }
+
+export function beatsOf(target: Target): Beats {
+  if (isOnTheMoon(target)) {
+    const step = target.stepped
+    return step === undefined ? { over: target.ended ?? -Infinity } : { step, over: step + ticksOf(EVA) }
+  }
+  if (target.ended === undefined) return { over: -Infinity }
+
+  const arrive = target.ended
+  const land = target.landed === undefined ? undefined : Math.max(arrive + ticksOf(IN_ORBIT), target.landed)
+  const step = land === undefined || target.stepped === undefined ? undefined : Math.max(land + ticksOf(LAND), target.stepped)
+  const over = step !== undefined ? step + ticksOf(EVA) : land !== undefined ? land + ticksOf(LAND) : arrive + ticksOf(IN_ORBIT)
+  return { arrive, land, step, over }
+}
+
+// How long a target's ending plays, in ticks from when Claude stopped.
+export const endingTicksOf = (target: Target) =>
+  target.scene === 'apollo' ? Math.max(0, beatsOf(target).over - (target.ended ?? target.since)) : ENDING_TICKS[target.scene]
+
+// Whether Apollo 11 has docked and is coasting `tick` into the turn: from
+// then on it flies toward the Moon as the turn gets on.
+export const isCoasting = (target: Target, tick: number) =>
+  target.scene === 'apollo' && target.phase === 'whole' && !isOnTheMoon(target) && ((tick - target.born) * TICK_MS) / 1000 >= DOCKED
 
 // How long an agent's craft takes to fly in, and to fly off once it finishes.
 export const ARRIVE_SECONDS = 1.4
@@ -52,6 +91,8 @@ export type Frame = {
   isLabeled?: boolean
   // The view as the person turned and zoomed it; the usual when absent.
   view?: View
+  // Apollo 11, where the scene is it.
+  mission?: Mission
 }
 
 export type FrameState = {
@@ -69,6 +110,9 @@ export type FrameState = {
   isLabeled?: boolean
   // The dashboard's camera, as its mouse turned it; the usual when absent.
   view?: View
+  // How far Apollo 11 has flown toward the Moon this turn; the turn's
+  // progress when absent.
+  flown?: number
 }
 
 const seconds = (ticks: number) => (ticks * TICK_MS) / 1000
@@ -86,7 +130,7 @@ export function toFrame(s: FrameState): Frame {
   const target: TargetView =
     s.target.phase === 'whole'
       ? { kind: 'whole', arrival: Math.min(1, ticks / ARRIVE_TICKS[scene]) }
-      : s.target.phase === 'ending' && ticks < ENDING_TICKS[scene]
+      : s.target.phase === 'ending' && ticks < endingTicksOf(s.target)
         ? { kind: 'ending', t: seconds(ticks) }
         : { kind: 'gone' }
   // A still picture shows each agent in place, and none leaving.
@@ -114,21 +158,43 @@ export function toFrame(s: FrameState): Frame {
     crew,
     isLabeled: s.isLabeled === true,
     view: s.view,
+    ...(scene === 'apollo' ? { mission: missionOf(s) } : {}),
+  }
+}
+
+// Apollo 11 as a frame shows it; a still picture is the rocket on the pad.
+function missionOf(s: FrameState): Mission {
+  const { target } = s
+  const progress = progressOf(s.work, s.tasks)
+  const go = { isGoForLanding: target.landed !== undefined, isGoForEva: target.stepped !== undefined }
+  if (s.tick === undefined) return { launch: 0, flown: 0, onTheMoon: false, prep: 0, ...go }
+
+  const now = s.tick
+  const since = (tick: number | undefined) => (tick === undefined ? undefined : seconds(now - tick))
+  const beats = beatsOf(target)
+  return {
+    launch: seconds(now - target.born),
+    flown: s.flown ?? progress,
+    arrive: since(beats.arrive),
+    land: since(beats.land),
+    step: since(beats.step),
+    onTheMoon: isOnTheMoon(target),
+    prep: progress,
+    ...go,
   }
 }
 
 // Claude can't know how long a turn will take, so progress counts work done
 // (requests and tool calls) and slows as it goes: only the stop finishes it.
 // With a task list, it follows tasks done and creeps toward the next one.
-export function progressStage(work: number, tasks: Tasks | null): number {
+export function progressOf(work: number, tasks: Tasks | null): number {
   const states = tasks ? Object.values(tasks.ids) : []
-  let progress = 1 - Math.exp(-work / 8)
+  if (!tasks || states.length === 0) return 1 - Math.exp(-work / 8)
 
-  if (tasks && states.length > 0) {
-    const done = states.filter(state => state === 'done').length
-    const creep = 0.9 * (1 - Math.exp(-Math.max(0, work - tasks.base) / 6))
-    progress = (done + creep) / states.length
-  }
-
-  return Math.max(0, Math.min(9, Math.floor(10 * progress)))
+  const done = states.filter(state => state === 'done').length
+  const creep = 0.9 * (1 - Math.exp(-Math.max(0, work - tasks.base) / 6))
+  return Math.min(1, (done + creep) / states.length)
 }
+
+// The progress in tenths, 0 to 9.
+export const progressStage = (work: number, tasks: Tasks | null): number => Math.max(0, Math.min(9, Math.floor(10 * progressOf(work, tasks))))

@@ -23,7 +23,7 @@ world, each with its own moons:
 | medium | Mars | Phobos, Deimos |
 | high | Earth | the Moon |
 | xhigh | Saturn, rings and all | Enceladus, Titan |
-| max | Jupiter | Io, Europa, Ganymede, Callisto |
+| max | Jupiter, its Great Red Spot turning | Io, Europa, Ganymede, Callisto |
 | a thinking budget | Neptune | Triton |
 | no effort setting | Pluto | Charon |
 
@@ -37,6 +37,16 @@ requests and tool calls, or by its task list where it keeps one:
 - **asteroid** (auto mode): the probe lasers an asteroid, which cracks as Claude
   works and shatters when Claude stops. Tougher with more effort: a stony
   asteroid at low, a comet at xhigh, a metal one at max.
+- **apollo** (`/probe apollo`): Apollo 11, over black and the stars, with the
+  real Earth and Moon lit as they were in July 1969. Each turn the Saturn V
+  lifts off from pad 39A, drops its stages, makes Earth orbit and burns for the
+  Moon, and Columbia turns round to dock with Eagle. The coast out goes as far
+  as the turn has got, and when Claude stops, Apollo goes behind the Moon into
+  lunar orbit. A `git commit` (or `gh pr create`) lands Eagle at Tranquility
+  Base; a `git push` (or a merge) puts Neil on the ladder, then the Moon, Buzz
+  after him, and the flag up. A turn that lands Eagle and no more goes on from
+  the Moon next turn; any other turn without a commit or a push starts over at
+  the pad.
 
 **Every agent flies a craft of its own**, after a real mission (Voyager,
 Cassini, Rosetta, Dawn, New Horizons...): it flies in when the agent starts,
@@ -49,7 +59,7 @@ about the pointer; right-click to put it back.
 | `/probe ...` | |
 | --- | --- |
 | `on`, `off` | the probe in the dashboard's place, or off it, kept across sessions |
-| `orbit`, `survey`, `asteroid`, `follow` | keep a scene whatever the mode, or follow the mode again |
+| `orbit`, `survey`, `asteroid`, `apollo`, `follow` | keep a scene whatever the mode, or follow the mode again |
 | `jupiter`, `saturn`, ... `effort` | keep a world whatever the effort, or let the effort pick again |
 | `juno`, `voyager`, `cassini`, ... | the craft Claude flies (Juno unless asked) |
 | `labels on`, `labels off` | names over the craft, where the picture is fine enough |
@@ -109,4 +119,6 @@ one's colors:
 
 MIT, for the code, the clips and the pictures in `docs/`. The panoramas were
 made with Grok's image generator. The craft are named after real missions and
-drawn as simple shapes; none of their agencies' artwork is used.
+drawn as simple shapes; none of their agencies' artwork is used. Apollo 11's
+Earth is filled in from Natural Earth's 1:110m land outlines, which are in the
+public domain; its Moon's seas and craters are placed by their coordinates.

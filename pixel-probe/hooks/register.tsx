@@ -1,10 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { Effort, Scene, Tasks, WorldName } from '../types'
+import type { Effort, Scene, Target, Tasks, WorldName } from '../types'
+import { moveOf } from './apollo'
 import type { Told } from './caption'
 import { CRAFT } from './craft'
-import { ENDING_TICKS, LEAVE_SECONDS, TICK_MS, progressStage, sceneFor } from './frame'
+import { LEAVE_SECONDS, TICK_MS, beatsOf, endingTicksOf, isCoasting, progressOf, progressStage, sceneFor } from './frame'
 import type { FrameState } from './frame'
 import { findMirror, panelShows, publish } from './mirror'
 import type { Mirror, Showing } from './mirror'
@@ -26,6 +27,7 @@ const world = atom({ plugin: 'pixel-probe', key: 'world' } as const, null)
 const craft = atom({ plugin: 'pixel-probe', key: 'craft' } as const, null)
 const labels = atom({ plugin: 'pixel-probe', key: 'labels' } as const, false)
 const helpers = atom({ plugin: 'pixel-probe', key: 'helpers' } as const, {})
+const flown = atom({ plugin: 'pixel-probe', key: 'flown' } as const, 0)
 
 // How long an agent's craft takes to fly off, and how often the agents are
 // checked against the session's own list, in ticks.
@@ -35,7 +37,9 @@ const RECONCILE_TICKS = 50
 const DRIFT_MS = 1000
 
 const LEVELS: readonly unknown[] = ['low', 'medium', 'high', 'xhigh', 'max']
-const SCENES: readonly unknown[] = ['orbit', 'survey', 'asteroid']
+const SCENES: readonly unknown[] = ['orbit', 'survey', 'asteroid', 'apollo']
+// How much of the way left Apollo 11 closes each tick, easing after the turn's progress.
+const FLY = 0.08
 
 const toLevel = (value: unknown): Effort | undefined =>
   LEVELS.includes(value) ? (value as Effort) : undefined
@@ -74,6 +78,12 @@ async function advance($: EngineInterface) {
   if (pace === DRIFT_MS && shown !== 'probe') return
 
   const now = await update($, tick, n => n + 1)
+  // Apollo 11, docked, flies on toward the Moon as the turn gets on.
+  const flying = await read($, target)
+  if (isCoasting(flying, now)) {
+    const goal = progressOf(await read($, work), await read($, tasks))
+    await update($, flown, way => (Math.abs(goal - way) < 0.001 ? way : way + (goal - way) * FLY))
+  }
   const crew = await update($, helpers, all => {
     const played = Object.entries(all).filter(([, helper]) => helper.left !== undefined && now - helper.left >= LEAVE_TICKS)
     return played.length === 0 ? all : Object.fromEntries(Object.entries(all).filter(([id]) => !played.some(([gone]) => gone === id)))
@@ -108,6 +118,7 @@ async function sceneState($: EngineInterface): Promise<{ state: FrameState; told
     craft: craftOf(await read($, craft)) ?? 0,
     isLabeled: await read($, labels),
     tick: await read($, tick),
+    flown: await read($, flown),
   }
 
   return { state, told: { level, seen: await read($, mode), working } }
@@ -248,16 +259,42 @@ async function noteStage($: EngineInterface, before: number): Promise<number> {
   return now
 }
 
-// Claude stopped: the orbit closes, the map is made, the asteroid shatters.
+// Claude stopped: the orbit closes, the map is made, the asteroid shatters,
+// Apollo 11 makes lunar orbit.
 async function finishTarget($: EngineInterface) {
   const current = await read($, target)
   if (current.phase !== 'whole') return
 
   const now = await read($, tick)
-  await update($, target, live => (live.phase === 'whole' ? { ...live, phase: 'ending' as const, since: now } : live))
-  animateUntil = now + ENDING_TICKS[current.scene]
+  const ending = await update($, target, live => (live.phase === 'whole' ? { ...live, phase: 'ending' as const, since: now, ended: now } : live))
+  animateUntil = now + endingTicksOf(ending)
   startTicking($)
   await cue($, current.scene, 'end')
+}
+
+// Apollo 11's last turn ended with Eagle down and no step yet, and a commit
+// came in it: this turn goes on from the Moon, where a push puts Neil on it.
+// Any other ending starts the mission over.
+const goesOn = (last: Target) =>
+  last.scene === 'apollo' && last.landed !== undefined && last.stepped === undefined && last.acted !== undefined && last.acted >= (last.turn ?? last.born)
+
+// A commit or a push came: Eagle lands once it can, Neil steps down once it has.
+async function goFor($: EngineInterface, move: 'land' | 'step') {
+  if ((await read($, target)).scene !== 'apollo') return
+
+  const now = await read($, tick)
+  const marked = await update($, target, live =>
+    live.scene !== 'apollo'
+      ? live
+      : { ...live, landed: live.landed ?? now, ...(move === 'step' ? { stepped: live.stepped ?? now } : {}), acted: now },
+  )
+  // After Claude has stopped (a background agent's commit), the rest plays out from here.
+  const { over } = beatsOf(marked)
+  if (over > now) {
+    animateUntil = Math.max(animateUntil, over)
+    if (marked.phase === 'gone') await update($, target, live => (live.phase === 'gone' ? { ...live, phase: 'ending' as const, since: live.ended ?? live.since } : live))
+    startTicking($)
+  }
 }
 
 // A standing target of another scene is swapped for a fresh one; one already
@@ -293,7 +330,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'probe',
       description:
-        "The probe on mc-rice's dashboard, in Steve's place once /steve off: /probe on|off, orbit|survey|asteroid|follow the scene, " +
+        "The probe on mc-rice's dashboard, in Steve's place once /steve off: /probe on|off, orbit|survey|asteroid|apollo|follow the scene, " +
         'moon|mars|earth|saturn|jupiter|neptune|pluto the world (effort: the effort picks it), juno|voyager|cassini|... the craft Claude flies, ' +
         'labels on|off names over the craft, sound on|off',
     })
@@ -303,8 +340,8 @@ export const register: Register = on => {
     // where it was; one already played out is gone.
     const now = await read($, tick)
     const left = await read($, target)
-    const isEnding = left.phase === 'ending' && now < left.since + ENDING_TICKS[left.scene]
-    if (isEnding) animateUntil = left.since + ENDING_TICKS[left.scene]
+    const isEnding = left.phase === 'ending' && now < left.since + endingTicksOf(left)
+    if (isEnding) animateUntil = left.since + endingTicksOf(left)
     else await update($, target, current => (current.phase === 'ending' ? { ...current, phase: 'gone' as const } : current))
 
     // Until the first request says otherwise, trust the saved setting.
@@ -321,8 +358,8 @@ export const register: Register = on => {
     const visits = toWorld(await $.store.get('world'))
     if (visits !== undefined) await update($, world, () => visits)
     if ((await $.store.get('labels')) === true) await update($, labels, () => true)
-    const flown = await $.store.get('craft')
-    const flies = craftOf(typeof flown === 'string' ? flown : null)
+    const named = await $.store.get('craft')
+    const flies = craftOf(typeof named === 'string' ? named : null)
     claudeFlies = flies ?? 0
     await update($, craft, () => (flies === undefined ? null : (CRAFT[flies]?.name ?? null)))
     // A new session starts with no agents at work.
@@ -345,10 +382,10 @@ export const register: Register = on => {
   })
 
   // The dashboard's panel, told about this session, hears that it is over.
-  // After a /clear Claude goes on, a fresh session that starts nothing, and
-  // the panel follows it.
+  // After a /clear or a /resume Claude goes on, under a session that starts
+  // nothing, and the panel follows it.
   on('session.end', async ($, e, next) => {
-    if (e.reason !== 'clear') {
+    if (e.reason !== 'clear' && e.reason !== 'resume') {
       isOver = true
       if (mirror !== undefined && hasPublished) await publish($, mirror, { v: 1, ended: true })
     }
@@ -387,7 +424,9 @@ export const register: Register = on => {
 
     if (scene !== undefined || asked === 'follow') {
       await pin($, scene ?? null)
-      return { text: scene === undefined ? 'The scene follows the permission mode again.' : `The probe will ${scene === 'asteroid' ? 'mine asteroids' : scene} whatever the mode.` }
+      const does = scene === 'asteroid' ? 'mine asteroids' : scene === 'apollo' ? 'fly Apollo 11 to the Moon' : scene
+      const how = scene === 'apollo' ? ': each turn launches, a commit lands Eagle, a push puts Neil on the Moon.' : '.'
+      return { text: scene === undefined ? 'The scene follows the permission mode again.' : `The probe will ${does} whatever the mode${how}` }
     }
     // A world kept whatever the effort, from now and in new sessions; `effort` lets the effort pick again.
     if (visits !== undefined || asked === 'effort') {
@@ -431,7 +470,7 @@ export const register: Register = on => {
       return { text: 'The probe is off the dashboard, and stays off in new sessions: /probe on brings it back.' }
     }
     if (asked !== '' && asked !== 'on') {
-      return { text: `/probe doesn't know "${asked}": try on, off, orbit, survey, asteroid, follow, a world, a craft, labels or sound.` }
+      return { text: `/probe doesn't know "${asked}": try on, off, orbit, survey, asteroid, apollo, follow, a world, a craft, labels or sound.` }
     }
 
     // On, from now and in new sessions: the dashboard draws the probe in
@@ -471,13 +510,24 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
       isTurnRunning = true
+      // A session taking turns is not over, whatever said it was.
+      isOver = false
 
-      // Last turn's target ended: a fresh one arrives, of the scene in force.
-      // One left standing by an interrupted turn stays, progress and all.
-      if ((await read($, target)).phase !== 'whole') {
+      // Last turn's target ended: a fresh one arrives, of the scene in force,
+      // unless Apollo 11 landed last turn and goes on from the Moon. One left
+      // standing by an interrupted turn stays, progress and all.
+      const last = await read($, target)
+      if (last.phase !== 'whole') {
         await update($, work, () => 0)
         await update($, tasks, () => null)
-        await freshTarget($, (await read($, pinned)) ?? sceneFor(await read($, mode)))
+        await update($, flown, () => 0)
+        const scene = (await read($, pinned)) ?? sceneFor(await read($, mode))
+        const now = await read($, tick)
+        if (scene === 'apollo' && goesOn(last)) {
+          await update($, target, () => ({ ...last, phase: 'whole' as const, since: now, turn: now, ended: undefined }))
+        } else {
+          await freshTarget($, scene)
+        }
       }
       await update($, isWorking, () => true)
       startTicking($)
@@ -510,6 +560,9 @@ export const register: Register = on => {
     const reached = await noteStage($, before)
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError) return ran
+
+    const move = (e.tool === 'Bash' || e.tool === 'PowerShell') && typeof e.command === 'string' ? moveOf(e.command) : undefined
+    if (move !== undefined) await goFor($, move)
 
     const result: unknown = ran.result
     const change = taskChange(e.tool, e, result)
