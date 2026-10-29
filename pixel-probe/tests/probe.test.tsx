@@ -329,9 +329,17 @@ test('/probe apollo flies Apollo 11 each turn: off the pad, out as far as the tu
   await seen.clock.advance(ENDING_TICKS.apollo * TICK_MS + 200)
   await shown(seen, /lunar orbit · a commit lands Eagle/)
 
-  // Nothing committed or pushed: the next turn launches again.
+  // Nothing committed: the next turn goes on in lunar orbit, readying Eagle as it gets on.
   await $.turn.start({ text: 'again', turnId: 't2' })
-  await shown(seen, /ignition/)
+  await shown(seen, /lunar orbit · burn to round it out/)
+  await work($, 16)
+  await seen.clock.advance(200)
+  await shown(seen, /lunar orbit · Eagle ready · a commit lands it/)
+
+  // A commit there lands Eagle at once.
+  await $.tool.call({ tool: 'Bash', command: 'git commit -m "Ready"' })
+  await seen.clock.advance(11_000)
+  await shown(seen, /the Eagle has landed/)
 })
 
 test('a commit lands Eagle at Tranquility Base, the next turn goes on from the Moon, and a push puts Neil on it to plant the flag', async ($, on) => {
@@ -367,7 +375,7 @@ test('a commit lands Eagle at Tranquility Base, the next turn goes on from the M
   await shown(seen, /ignition/)
 })
 
-test('a push alone lands Eagle and puts Neil on the Moon in the same turn, and a turn on the Moon without one starts over', async ($, on) => {
+test('a push alone lands Eagle and puts Neil on the Moon in the same turn, and a turn on the Moon without one stays there', async ($, on) => {
   const seen = engine(on, { effortLevel: 'high' })
   await start($)
   await probe($, 'apollo')
@@ -385,7 +393,8 @@ test('a push alone lands Eagle and puts Neil on the Moon in the same turn, and a
   await seen.clock.advance(32_000)
   await shown(seen, /the flag at Tranquility Base/)
 
-  // A commit alone, then a turn on the Moon with neither: the one after launches again.
+  // The flag up, the next turn launches a new mission; a commit alone lands it,
+  // and a turn on the Moon with neither stays there.
   await $.turn.start({ text: 'again', turnId: 't2' })
   await shown(seen, /ignition/)
   await $.tool.call({ tool: 'Bash', command: 'git commit -am wip' })
@@ -397,7 +406,7 @@ test('a push alone lands Eagle and puts Neil on the Moon in the same turn, and a
   await stop($, 'default')
   await complete($, 't3')
   await $.turn.start({ text: 'another', turnId: 't4' })
-  await shown(seen, /ignition/)
+  await shown(seen, /Tranquility Base · EVA prep/)
 })
 
 test('a commit or pull request lands Eagle; a push or merge puts Neil on the Moon; nothing else does', () => {
@@ -436,9 +445,11 @@ test('Apollo 11 draws at every part of its flight, the same each time', { timeou
     ...[160, 200, 240].map(tick => flightOf(tick)),
     flightOf(400),
     ...[620, 660, 700].map(tick => flightOf(tick, ended)),
-    ...[690, 760, 800].map(tick => flightOf(tick, { ...ended, landed: 300, acted: 300 })),
-    ...[790, 850, 920, 980].map(tick => flightOf(tick, { ...ended, landed: 300, stepped: 300, acted: 300 })),
-    flightOf(1100, { since: 1000, turn: 1000, landed: 300, acted: 300 }),
+    ...[690, 760, 800].map(tick => flightOf(tick, { ...ended, landed: 300 })),
+    ...[790, 850, 920, 980].map(tick => flightOf(tick, { ...ended, landed: 300, stepped: 300 })),
+    flightOf(1100, { since: 1000, turn: 1000, landed: 300 }),
+    ...[1050, 1100].map(tick => flightOf(tick, { since: 1000, turn: 1000, arrived: 900 })),
+    flightOf(1100, { since: 1000, turn: 1000, arrived: 900, landed: 1060 }),
   ]
   for (const frame of frames) {
     const first = drawScene(frame, 66, 64)
@@ -451,7 +462,7 @@ test('Apollo 11 draws at every part of its flight, the same each time', { timeou
 })
 
 test('once the flag is up a drag or the wheel pulls the eye back until Earth hangs small and blue above the landing site', () => {
-  const moonwalk = (tick: number) => flying(tick, { phase: 'ending', since: 600, ended: 600, landed: 300, stepped: 300, acted: 300 })
+  const moonwalk = (tick: number) => flying(tick, { phase: 'ending', since: 600, ended: 600, landed: 300, stepped: 300 })
   const drawn = (state: FrameState, view?: FrameState['view']) => drawScene(toFrame({ ...state, ...(view ? { view } : {}) }), 160, 120).color
   // Earth's sea blue, greener than the flag's, in the upper half of the picture.
   const blue = (colors: Uint32Array) =>

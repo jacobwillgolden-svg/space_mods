@@ -38,19 +38,20 @@ requests and tool calls, or by its task list where it keeps one:
   works and shatters when Claude stops. Tougher with more effort: a stony
   asteroid at low, a comet at xhigh, a metal one at max.
 - **apollo** (`/probe apollo`): Apollo 11, over black and the stars, with the
-  real Earth and Moon lit as they were in July 1969. Each turn the Saturn V
-  lifts off from pad 39A, drops its stages, makes Earth orbit and burns for the
-  Moon, and Columbia turns round to dock with Eagle. The coast out goes as far
-  as the turn has got, and when Claude stops, Apollo goes behind the Moon into
-  lunar orbit. A `git commit` (or `gh pr create`) lands Eagle at Tranquility
-  Base; a `git push` (or a merge) puts Neil on the ladder, then the Moon, Buzz
-  after him, and the flag up. A turn that lands Eagle and no more goes on from
-  the Moon next turn; any other turn without a commit or a push starts over at
-  the pad. Once the flag is up, drag over the picture (or scroll out) to pull
-  back from the flag to the landing site seen from a distance, Earth small and
-  blue high above it, then on up to orbit to see Earth rise over the Moon's
-  horizon as Apollo 11 photographed it (AS11-44-6551); right-click to go back
-  in.
+  real Earth and Moon lit as they were in July 1969, going only forward from
+  turn to turn. The first turn the Saturn V lifts off from pad 39A, drops its
+  stages, makes Earth orbit and burns for the Moon, and Columbia turns round to
+  dock with Eagle; the coast out goes as far as the turn has got, and when
+  Claude stops, Apollo goes behind the Moon into lunar orbit. Turns after that
+  go on in lunar orbit, Eagle readied as each gets on: the burn that rounds out
+  the orbit, Neil and Buzz powering Eagle up, its landing gear out. A
+  `git commit` (or `gh pr create`) lands Eagle at Tranquility Base; turns after
+  that go on from the Moon, and a `git push` (or a merge) puts Neil on the
+  ladder, then the Moon, Buzz after him, and the flag up. Only the turn after
+  the flag launches a new mission. Once the flag is up, drag over the picture
+  (or scroll out) to pull back from the flag to the landing site seen from a
+  distance, then up to orbit to see Earth rise over the Moon's horizon as
+  Apollo 11 photographed it (AS11-44-6551); right-click to go back in.
 
 **Every agent flies a craft of its own**, after a real mission (Voyager,
 Cassini, Rosetta, Dawn, New Horizons...): it flies in when the agent starts,

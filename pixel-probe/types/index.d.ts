@@ -16,10 +16,11 @@ export type Tasks = { ids: Record<string, 'open' | 'done'>; base: number }
 // What the probe works on this turn, which ends when Claude stops: the orbit,
 // the survey, the asteroid or the mission. `since` is the tick its phase
 // began, `born` the tick it appeared, which seeds it, and `ended` the tick
-// Claude stopped. Apollo 11 can outlast a turn: `turn` is the tick its latest
-// turn began, `landed` and `stepped` the ticks the commit (or PR) that lands
-// Eagle and the push (or merge) that puts Neil on the Moon came, and `acted`
-// the tick the last of them came.
+// Claude stopped. Apollo 11 goes on from turn to turn until the flag is up:
+// `turn` is the tick its latest turn began, `arrived` the tick a turn ended
+// with it bound for lunar orbit, and `landed` and `stepped` the ticks the
+// commit (or PR) that lands Eagle and the push (or merge) that puts Neil on
+// the Moon came.
 export type Target = {
   phase: 'whole' | 'ending' | 'gone'
   since: number
@@ -29,7 +30,7 @@ export type Target = {
   turn?: number
   landed?: number
   stepped?: number
-  acted?: number
+  arrived?: number
 }
 
 // A Claude agent at work beside the probe, flying a craft of its own: what

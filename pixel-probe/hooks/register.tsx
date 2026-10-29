@@ -272,11 +272,10 @@ async function finishTarget($: EngineInterface) {
   await cue($, current.scene, 'end')
 }
 
-// Apollo 11's last turn ended with Eagle down and no step yet, and a commit
-// came in it: this turn goes on from the Moon, where a push puts Neil on it.
-// Any other ending starts the mission over.
-const goesOn = (last: Target) =>
-  last.scene === 'apollo' && last.landed !== undefined && last.stepped === undefined && last.acted !== undefined && last.acted >= (last.turn ?? last.born)
+// Apollo 11 only goes forward: a turn that ended in lunar orbit goes on
+// there, one that ended on the Moon goes on from it, until the flag is up;
+// the turn after that launches a new mission.
+const goesOn = (last: Target) => last.scene === 'apollo' && last.stepped === undefined
 
 // A commit or a push came: Eagle lands once it can, Neil steps down once it has.
 async function goFor($: EngineInterface, move: 'land' | 'step') {
@@ -286,7 +285,7 @@ async function goFor($: EngineInterface, move: 'land' | 'step') {
   const marked = await update($, target, live =>
     live.scene !== 'apollo'
       ? live
-      : { ...live, landed: live.landed ?? now, ...(move === 'step' ? { stepped: live.stepped ?? now } : {}), acted: now },
+      : { ...live, landed: live.landed ?? now, ...(move === 'step' ? { stepped: live.stepped ?? now } : {}) },
   )
   // After Claude has stopped (a background agent's commit), the rest plays out from here.
   const { over } = beatsOf(marked)
@@ -514,7 +513,7 @@ export const register: Register = on => {
       isOver = false
 
       // Last turn's target ended: a fresh one arrives, of the scene in force,
-      // unless Apollo 11 landed last turn and goes on from the Moon. One left
+      // unless Apollo 11 goes on from lunar orbit or the Moon. One left
       // standing by an interrupted turn stays, progress and all.
       const last = await read($, target)
       if (last.phase !== 'whole') {
@@ -524,7 +523,7 @@ export const register: Register = on => {
         const scene = (await read($, pinned)) ?? sceneFor(await read($, mode))
         const now = await read($, tick)
         if (scene === 'apollo' && goesOn(last)) {
-          await update($, target, () => ({ ...last, phase: 'whole' as const, since: now, turn: now, ended: undefined }))
+          await update($, target, () => ({ ...last, phase: 'whole' as const, since: now, turn: now, ended: undefined, arrived: last.arrived ?? last.ended }))
         } else {
           await freshTarget($, scene)
         }

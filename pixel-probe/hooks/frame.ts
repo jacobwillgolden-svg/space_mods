@@ -26,16 +26,26 @@ const ticksOf = (seconds: number) => Math.ceil((seconds * 1000) / TICK_MS)
 // came in an earlier turn.
 export const isOnTheMoon = (target: Target) => target.landed !== undefined && target.landed < (target.turn ?? target.born)
 
+// Whether Apollo 11's turn began in lunar orbit, an earlier turn having ended
+// on the way there, and Eagle not yet down.
+export const isInLunarOrbit = (target: Target) => target.arrived !== undefined && !isOnTheMoon(target)
+
 // When Apollo 11's last moves begin, in ticks: the arrival at the Moon once
 // Claude stops; Eagle's landing once a commit has come and Apollo is in
-// lunar orbit; the moonwalk once a push has come and Eagle is down; and
-// `over`, when all of it is still.
+// lunar orbit (at once, in a turn begun there); the moonwalk once a push has
+// come and Eagle is down; and `over`, when all of it is still.
 export type Beats = { arrive?: number; land?: number; step?: number; over: number }
 
 export function beatsOf(target: Target): Beats {
   if (isOnTheMoon(target)) {
     const step = target.stepped
     return step === undefined ? { over: target.ended ?? -Infinity } : { step, over: step + ticksOf(EVA) }
+  }
+  if (isInLunarOrbit(target)) {
+    const land = target.landed
+    const step = land === undefined || target.stepped === undefined ? undefined : Math.max(land + ticksOf(LAND), target.stepped)
+    const over = step !== undefined ? step + ticksOf(EVA) : land !== undefined ? land + ticksOf(LAND) : (target.ended ?? -Infinity)
+    return { land, step, over }
   }
   if (target.ended === undefined) return { over: -Infinity }
 
@@ -53,7 +63,7 @@ export const endingTicksOf = (target: Target) =>
 // Whether Apollo 11 has docked and is coasting `tick` into the turn: from
 // then on it flies toward the Moon as the turn gets on.
 export const isCoasting = (target: Target, tick: number) =>
-  target.scene === 'apollo' && target.phase === 'whole' && !isOnTheMoon(target) && ((tick - target.born) * TICK_MS) / 1000 >= DOCKED
+  target.scene === 'apollo' && target.phase === 'whole' && target.arrived === undefined && !isOnTheMoon(target) && ((tick - target.born) * TICK_MS) / 1000 >= DOCKED
 
 // How long an agent's craft takes to fly in, and to fly off once it finishes.
 export const ARRIVE_SECONDS = 1.4
@@ -167,7 +177,7 @@ function missionOf(s: FrameState): Mission {
   const { target } = s
   const progress = progressOf(s.work, s.tasks)
   const go = { isGoForLanding: target.landed !== undefined, isGoForEva: target.stepped !== undefined }
-  if (s.tick === undefined) return { launch: 0, flown: 0, onTheMoon: false, prep: 0, ...go }
+  if (s.tick === undefined) return { launch: 0, flown: 0, onTheMoon: false, inOrbit: false, inTurn: 0, prep: 0, ...go }
 
   const now = s.tick
   const since = (tick: number | undefined) => (tick === undefined ? undefined : seconds(now - tick))
@@ -179,6 +189,8 @@ function missionOf(s: FrameState): Mission {
     land: since(beats.land),
     step: since(beats.step),
     onTheMoon: isOnTheMoon(target),
+    inOrbit: isInLunarOrbit(target),
+    inTurn: seconds(now - (target.turn ?? target.born)),
     prep: progress,
     ...go,
   }

@@ -26,9 +26,13 @@ export type Mission = {
   arrive?: number
   land?: number
   step?: number
-  // Whether the turn began with Eagle already down, from a commit last turn.
+  // Whether the turn began with Eagle already down, from a commit in an
+  // earlier turn; or in lunar orbit, Eagle not yet down; and seconds since it began.
   onTheMoon: boolean
-  // The turn's progress, 0 to 1: on the Moon, the moonwalk's preparations.
+  inOrbit: boolean
+  inTurn: number
+  // The turn's progress, 0 to 1: in lunar orbit, Eagle's readying; on the
+  // Moon, the moonwalk's preparations.
   prep: number
   // Whether a commit (or PR) has come, and a push (or merge).
   isGoForLanding: boolean
@@ -365,9 +369,11 @@ function lm(lit: Lit, isLegsOut: boolean): Shape {
   }
 }
 
-// Columbia and Eagle docked nose to nose, 17.4 m: Columbia's engine at u = 0.
-function docked(lit: Lit): Shape {
-  const [command, lunar] = [csm(lit), lm({ side: -lit.side, front: lit.front }, false)]
+// Columbia and Eagle docked nose to nose, 17.4 m: Columbia's engine at u = 0;
+// Eagle's legs folded as it flew from the Earth, or out, as in lunar orbit
+// before the landing.
+function docked(lit: Lit, isLegsOut = false): Shape {
+  const [command, lunar] = [csm(lit), lm({ side: -lit.side, front: lit.front }, isLegsOut)]
   return (u, v) => (u < 11 ? command(u, v) : lunar(17.4 - u, -v))
 }
 
@@ -403,6 +409,7 @@ type Shot =
   | { kind: 'dock'; t: number }
   | { kind: 'coast'; at: number }
   | { kind: 'moon'; t: number }
+  | { kind: 'orbit'; t: number; prep: number }
   | { kind: 'descent'; t: number }
   | { kind: 'surface'; land: number; step?: number }
 
@@ -412,6 +419,7 @@ function shotOf(m: Mission): Shot {
   if (m.onTheMoon) return { kind: 'surface', land: Infinity, step }
   if (land !== undefined && land >= CUT) return { kind: 'surface', land, step }
   if (land !== undefined && land >= 0) return { kind: 'descent', t: land }
+  if (m.inOrbit) return { kind: 'orbit', t: m.inTurn, prep: m.prep }
   if (arrive !== undefined) {
     if (arrive < ARRIVE) return { kind: 'coast', at: m.flown + (1 - m.flown) * ease(arrive / ARRIVE) }
     return { kind: 'moon', t: arrive - ARRIVE }
@@ -435,6 +443,9 @@ export function drawApollo(c: Canvas, m: Mission, time: number, levels: number, 
       return coastShot(c, shot.at, time, levels)
     case 'moon':
       return moonShot(c, shot.t, time, levels)
+    case 'orbit':
+      // On round the Moon, Eagle readied: the burn that rounds the orbit, then its legs out.
+      return moonShot(c, IN_ORBIT - ARRIVE + 3 + shot.t, time, levels, shot.prep >= 0.55, shot.prep > 0.04 && shot.prep < 0.2)
     case 'descent':
       return descentShot(c, shot.t, time, levels)
     case 'surface':
@@ -476,6 +487,13 @@ export function missionWords(m: Mission): string {
       if (t < 1.2) return 'approaching the Moon'
       if (t < IN_ORBIT - ARRIVE) return 'loss of signal · lunar orbit insertion'
       return m.isGoForLanding ? 'lunar orbit · go for landing' : 'lunar orbit · a commit lands Eagle'
+    }
+    case 'orbit': {
+      const { prep } = shot
+      if (prep < 0.25) return 'lunar orbit · burn to round it out, 100 by 122 km'
+      if (prep < 0.55) return 'lunar orbit · Neil and Buzz power up Eagle'
+      if (prep < 0.8) return "lunar orbit · Eagle's landing gear out"
+      return 'lunar orbit · Eagle ready · a commit lands it'
     }
     case 'descent': {
       const { t } = shot
@@ -753,7 +771,7 @@ function coastShot(c: Canvas, at: number, time: number, levels: number) {
 // west over the near side as Apollo's orbits went.
 const ORBIT_SECONDS = 16
 
-function moonShot(c: Canvas, t: number, time: number, levels: number) {
+function moonShot(c: Canvas, t: number, time: number, levels: number, isLegsOut = false, isBurning = false) {
   const { width: W, height: H } = c
   const unit = Math.min(W, H)
   const turn = facing(rad(12), rad(35))
@@ -783,7 +801,9 @@ function moonShot(c: Canvas, t: number, time: number, levels: number) {
   const [x, y] = [moon.x + p[0] * moon.r, moon.y - p[1] * moon.r]
   const angle = Math.atan2(ahead[1] - p[1], ahead[0] - p[0])
   const length = Math.max(10, 0.075 * unit)
-  sprite(c, { x: x - Math.cos(angle) * length * 0.5, y: y + Math.sin(angle) * length * 0.5, z: p[2] * moon.r, scale: length / 17.4, angle }, [0, 17.4, -2.6, 2.6], docked(litAt(angle, light)))
+  const [tailX, tailY] = [x - Math.cos(angle) * length * 0.5, y + Math.sin(angle) * length * 0.5]
+  sprite(c, { x: tailX, y: tailY, z: p[2] * moon.r, scale: length / 17.4, angle }, [0, 17.4, -4.8, 4.8], docked(litAt(angle, light), isLegsOut))
+  if (isBurning) flame(c, tailX, tailY, angle + Math.PI, length * 0.4, length * 0.12, 0x9fc8ff, time, p[2] * moon.r + 1, 0.7)
 }
 
 // The landing seen from orbit: Columbia and Eagle over the Sea of
@@ -811,7 +831,7 @@ function descentShot(c: Canvas, t: number, time: number, levels: number) {
   const [cx, cy] = screen(columbia)
   const [ex, ey] = screen(eagle)
   if (t < 0.8) {
-    sprite(c, { x: cx - length * 0.5, y: cy, z: columbia[2] * moon.r + 5, scale, angle: 0 }, [0, 17.4, -2.6, 2.6], docked(litAt(Math.PI, light)))
+    sprite(c, { x: cx - length * 0.5, y: cy, z: columbia[2] * moon.r + 5, scale, angle: 0 }, [0, 17.4, -4.8, 4.8], docked(litAt(Math.PI, light), true))
     return
   }
   const shape = csm(litAt(Math.PI, light))
@@ -843,7 +863,7 @@ type View = { W: number; H: number; f: number; cx: number; cy: number; eye: Vec;
 
 // How far a drag or the wheel has pulled the eye back from the flag, 0 to 1:
 // any drag, either way, or the wheel rolled out; back to the landing site
-// seen from a distance, then up to orbit to see Earth rise (RISING, RISEN).
+// seen from a distance, then, cut, up in orbit to see Earth rise (RISEN).
 // A right-click on the dashboard brings it back in.
 const pulledBack = (view: TurnedView | undefined) =>
   view === undefined ? 0 : clamp(Math.max(Math.abs(view.tip) / 0.9, Math.abs(view.spin) / 1.5, (1 - view.zoom) / 0.4), 0, 1)
@@ -878,10 +898,9 @@ const viewOf = (c: Canvas, isClose: boolean, back = 0): View => {
 // The moonwalk cuts in close as the flag goes in.
 const CLOSE = 9
 
-// How far back the drag goes before the picture starts to dissolve into the
-// view from orbit, and how far until it is all that is left.
-const RISING = 0.55
-const RISEN = 0.85
+// How far back the drag goes, from the flag to the landing site from a
+// distance, before the picture cuts to the view from orbit.
+const RISEN = 0.6
 
 // The view from orbit, as Apollo 11 photographed it there (AS11-44-6551):
 // 110 km up, looking along the ground to the horizon through a long lens,
@@ -1072,37 +1091,6 @@ function starsOf() {
     return { way: [across * Math.cos(turn), y, across * Math.sin(turn)] as Vec, bright: 0.25 + 0.75 * next() ** 3 }
   })
   return skyStars
-}
-
-// Earth from Tranquility Base: 66.5° up, just south of west, 1.9° across;
-// lit on its side toward the sun, low in the east, so a little more than
-// half lit; the Atlantic toward the Moon, the Americas on its sunlit edge.
-const EARTH_WAY = unit3([-0.398, 0.917, -0.0107])
-const EARTH_ANGLE = Math.asin(6371 / 384_400)
-const SUN_WAY: Vec = [Math.cos(rad(10.8)), Math.sin(rad(10.8)), 0]
-
-function drawEarthAbove(c: Canvas, v: View, levels: number) {
-  const far = dot(EARTH_WAY, v.forward)
-  if (far < 0.1) return
-  const x = v.cx + (v.f * dot(EARTH_WAY, v.right)) / far
-  const y = v.cy - (v.f * dot(EARTH_WAY, v.up)) / far
-  // Never smaller than a dot that can be found, as the rocket is drawn bigger than it is.
-  const r = Math.max(4.5, (v.f * EARTH_ANGLE) / far)
-  if (x + 2.5 * r < 0 || x - 2.5 * r > c.width || y + 2.5 * r < 0 || y - 2.5 * r > c.height) return
-  // A faint blue glow round it in the black: the pale blue dot.
-  for (let py = Math.floor(y - 2.5 * r); py <= Math.ceil(y + 2.5 * r); py++) {
-    for (let px = Math.floor(x - 2.5 * r); px <= Math.ceil(x + 2.5 * r); px++) {
-      const d = Math.hypot(px + 0.5 - x, py + 0.5 - y) / r
-      if (d > 1 && d < 2.5) glow(c, px, py, 0x6f9fe8, 0.4 * ((2.5 - d) / 1.5) ** 2, -1e8)
-    }
-  }
-  // Earth's north where the Moon's north falls on the screen.
-  const north: Vec = [0, 0, 1]
-  const roll = Math.atan2(dot(north, v.up), dot(north, v.right)) - Math.PI / 2
-  const light = unit3([dot(SUN_WAY, v.right), dot(SUN_WAY, v.up), -dot(SUN_WAY, EARTH_WAY)])
-  const at = { x, y, r, z: -1e8 }
-  drawBall(c, earthChart(chartWidth(r)), at, facing(rad(-5), rad(-44), roll), light, levels, 0.03, 0.45)
-  if (r > 3) drawAir(c, at, light)
 }
 
 // A filled polygon of screen points at nearness `z`, its color by pixel.
@@ -1324,7 +1312,7 @@ function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDo
     c.color.set(earthriseOf(c.width, c.height, levels))
     return
   }
-  const v = viewOf(c, step !== undefined && step >= CLOSE, Math.min(1, back / RISING))
+  const v = viewOf(c, step !== undefined && step >= CLOSE, back / RISEN)
   const ground = groundOf(c, v)
   c.color.fill(0)
   c.depth.fill(-Infinity)
@@ -1335,7 +1323,6 @@ function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDo
     const py = Math.floor(v.cy - (v.f * dot(star.way, v.up)) / far)
     if (px >= 0 && py >= 0 && px < c.width && py < c.height) c.color[py * c.width + px] = shade(0xf4f6ff, star.bright * 0.8)
   }
-  drawEarthAbove(c, v, levels)
 
   // Eagle's way down: in from the east, slowing, then straight down to touch.
   const k = clamp((land - CUT) / (TOUCHDOWN - CUT), 0, 1)
@@ -1396,13 +1383,6 @@ function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDo
   }
   if (flagAt) drawFlag(c, v, FLAG_X, FLAG_D, flagAt.planted, flagAt.unfurled)
   for (const w of walkers) drawWalker(c, v, w.x, w.y, w.d, w.way, w.gait, w.stride)
-
-  // Pulled further back, the landing site dissolves into the view from orbit.
-  if (back > RISING) {
-    const rise = earthriseOf(c.width, c.height, levels)
-    const k = ease((back - RISING) / (RISEN - RISING))
-    for (let i = 0; i < c.color.length; i++) c.color[i] = mix(c.color[i] ?? 0, rise[i] ?? 0, k)
-  }
 }
 
 type Walker = { x: number; y: number; d: number; way: number; gait: Gait; stride: number }
