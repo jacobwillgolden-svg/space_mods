@@ -46,10 +46,10 @@ requests and tool calls, or by its task list where it keeps one:
   Base; a `git push` (or a merge) puts Neil on the ladder, then the Moon, Buzz
   after him, and the flag up. A turn that lands Eagle and no more goes on from
   the Moon next turn; any other turn without a commit or a push starts over at
-  the pad. Once the flag is up, drag over the picture to look round the Sea of
-  Tranquility: across and down to the west and up, Earth hangs where it did,
-  66.5° up and small and blue; scroll to zoom in on it, right-click to look
-  back at the flag.
+  the pad. Once the flag is up, drag over the picture (or scroll out) to pull
+  back from the flag to the landing site seen from a distance, with Earth
+  hanging small and blue above it, 66.5° up as it did; right-click to go back
+  in.
 
 **Every agent flies a craft of its own**, after a real mission (Voyager,
 Cassini, Rosetta, Dawn, New Horizons...): it flies in when the agent starts,

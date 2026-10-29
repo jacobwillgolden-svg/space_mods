@@ -283,7 +283,7 @@ export function drawScene(frame: Frame, width: number, height = width, backdrop?
   // Finer shading, and names, where the picture has the pixels for them.
   const levels = unit >= 200 ? 7 : 4
   // Apollo 11 is a film of its own, framed shot by shot; the person's view
-  // turns the eye on the Moon once the flag is up.
+  // pulls the eye back from the flag once it is up.
   if (frame.mission) {
     drawApollo(c, frame.mission, frame.time, levels, frame.view)
     return c

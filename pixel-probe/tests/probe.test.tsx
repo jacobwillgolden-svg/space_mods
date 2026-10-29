@@ -450,21 +450,28 @@ test('Apollo 11 draws at every part of its flight, the same each time', { timeou
   expect(describe(still, { level: 'high', seen: null, working: false }).caption).toBe('ignition · all engines running')
 })
 
-test('once the flag is up a drag turns the eye on the Moon, and up to the west Earth hangs small and blue', () => {
+test('once the flag is up a drag or the wheel pulls the eye back until Earth hangs small and blue above the landing site', () => {
   const moonwalk = (tick: number) => flying(tick, { phase: 'ending', since: 600, ended: 600, landed: 300, stepped: 300, acted: 300 })
   const drawn = (state: FrameState, view?: FrameState['view']) => drawScene(toFrame({ ...state, ...(view ? { view } : {}) }), 160, 120).color
-  // Blue enough to be Earth's seas, in the upper half where only sky is when looking up.
-  const blue = (colors: Uint32Array) => [...colors.subarray(0, 160 * 60)].filter(color => (color & 255) > ((color >> 16) & 255) + 40 && (color & 255) > 90).length
-  const towardEarth = { ...USUAL_VIEW, spin: 1.57, tip: 0.9 }
+  // Earth's sea blue, greener than the flag's, in the upper half of the picture.
+  const blue = (colors: Uint32Array) =>
+    [...colors.subarray(0, 160 * 60)].filter(color => {
+      const [r, g, b] = [(color >> 16) & 255, (color >> 8) & 255, color & 255]
+      return b > r + 40 && g > r + 15 && b > 90
+    }).length
+  const dragged = { ...USUAL_VIEW, tip: 0.9 }
+  const rolledOut = { ...USUAL_VIEW, zoom: 0.6 }
 
-  // The flag up: the usual view is the picture as it was; turned, Earth is there.
+  // The flag up: the usual view is the picture as it was; pulled back, Earth is there.
   const flagUp = moonwalk(980)
   expect(drawn(flagUp, USUAL_VIEW)).toEqual(drawn(flagUp))
-  expect(blue(drawn(flagUp, towardEarth))).toBeGreaterThan(0)
+  expect(blue(drawn(flagUp))).toBe(0)
+  expect(blue(drawn(flagUp, dragged))).toBeGreaterThan(0)
+  expect(drawn(flagUp, rolledOut)).toEqual(drawn(flagUp, dragged))
 
   // Before the flag the drag leaves the picture alone.
   const onTheLadder = moonwalk(830)
-  expect(drawn(onTheLadder, towardEarth)).toEqual(drawn(onTheLadder))
+  expect(drawn(onTheLadder, dragged)).toEqual(drawn(onTheLadder))
 })
 
 test("the Moon's craters are pressed in as slopes for the sun to catch, fewer on its seas than its highlands", () => {

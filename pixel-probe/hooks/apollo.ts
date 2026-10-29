@@ -422,8 +422,8 @@ function shotOf(m: Mission): Shot {
 }
 
 // The mission's picture, over the sky scene.ts has drawn; `view`, the
-// person's drag and wheel on the dashboard, turns the eye on the Moon once
-// the flag is up.
+// person's drag and wheel on the dashboard, pulls the eye back from the
+// flag once it is up, until Earth shows above the landing site.
 export function drawApollo(c: Canvas, m: Mission, time: number, levels: number, view?: TurnedView) {
   const shot = shotOf(m)
   switch (shot.kind) {
@@ -438,7 +438,7 @@ export function drawApollo(c: Canvas, m: Mission, time: number, levels: number, 
     case 'descent':
       return descentShot(c, shot.t, time, levels)
     case 'surface':
-      return surfaceShot(c, shot.land, shot.step, m.onTheMoon, time, levels, shot.step !== undefined && shot.step >= EVA ? lookOf(view) : undefined)
+      return surfaceShot(c, shot.land, shot.step, m.onTheMoon, time, levels, shot.step !== undefined && shot.step >= EVA ? pulledBack(view) : 0)
   }
 }
 
@@ -835,35 +835,42 @@ const FLAG_D = 15.5
 // Shadows are this many times longer than what casts them, the sun 10.8° up.
 const LONG = 1 / Math.tan(rad(10.8))
 
-// The eye on the Moon: `f` pixels a radian, its middle at (cx, cy) on
-// screen, and its right, up and forward ways, from where it looks: its
-// heading round from north toward east, and its pitch up from level.
-type View = { W: number; H: number; f: number; cx: number; cy: number; right: Vec; up: Vec; forward: Vec }
+// The eye on the Moon: where it is (east, up, north meters), `f` pixels a
+// radian, its middle at (cx, cy) on screen, and its right, up and forward
+// ways, from its heading round from north toward east and its pitch up from
+// level. The figures stand flat to the eye, turned with its heading.
+type View = { W: number; H: number; f: number; cx: number; cy: number; eye: Vec; right: Vec; up: Vec; forward: Vec; along: Vec }
 
-// Where the person has turned the eye and how near it looks: dragging
-// across turns it (right turns it west, as if the ground were grabbed),
-// dragging down looks up, the wheel zooms.
-type Look = { heading: number; pitch: number; zoom: number }
+// How far a drag or the wheel has pulled the eye back from the flag, 0 to 1:
+// any drag, either way, or the wheel rolled out; a right-click on the
+// dashboard brings it back in.
+const pulledBack = (view: TurnedView | undefined) =>
+  view === undefined ? 0 : clamp(Math.max(Math.abs(view.tip) / 0.9, Math.abs(view.spin) / 1.5, (1 - view.zoom) / 0.4), 0, 1)
 
-const lookOf = (view: TurnedView | undefined): Look | undefined =>
-  view === undefined ? undefined : { heading: -view.spin, pitch: clamp(view.tip * 1.25, -0.6, 1.15), zoom: view.zoom }
+// Pulled all the way back: 34 meters east of the landing site and 5 up,
+// looking west and up, so Eagle, the flag and the two of them sit on the
+// horizon and Earth hangs high above them, 66.5° up, as it did.
+const WIDE = { eye: [35.5, 5, 14.5] as Vec, heading: rad(-85), pitch: rad(29), f: 0.54 }
 
-const viewOf = (c: Canvas, isClose: boolean, look?: Look): View => {
+const viewOf = (c: Canvas, isClose: boolean, back = 0): View => {
   const unit = Math.min(c.width, c.height)
   const near = isClose ? 1.9 * unit : 0.95 * unit
-  const f = near * (look?.zoom ?? 1)
+  const k = ease(back)
   // Close in, the flag a little left of the middle.
   const cx = isClose ? 0.4 * c.width - (FLAG_X * near) / FLAG_D : 0.5 * c.width
-  const [h, p] = [look?.heading ?? 0, look?.pitch ?? 0]
+  const [h, p] = [WIDE.heading * k, WIDE.pitch * k]
+  const start: Vec = [0, EYE, 0]
   return {
     W: c.width,
     H: c.height,
-    f,
-    cx,
-    cy: Math.round(0.43 * c.height),
+    f: near * ((WIDE.f * unit) / near) ** k,
+    cx: cx + (0.5 * c.width - cx) * k,
+    cy: Math.round((0.43 + 0.07 * k) * c.height),
+    eye: plus(start, plus(WIDE.eye, start, -1), k),
     right: [Math.cos(h), 0, -Math.sin(h)],
     up: [-Math.sin(h) * Math.sin(p), Math.cos(p), -Math.cos(h) * Math.sin(p)],
     forward: [Math.sin(h) * Math.cos(p), Math.sin(p), Math.cos(h) * Math.cos(p)],
+    along: [Math.sin(h), 0, Math.cos(h)],
   }
 }
 
@@ -871,30 +878,37 @@ const viewOf = (c: Canvas, isClose: boolean, look?: Look): View => {
 const CLOSE = 9
 
 // How far ahead of the eye (east, up, north) meters are.
-const ahead = (v: View, x: number, y: number, d: number) => dot([x, y - EYE, d], v.forward)
+const ahead = (v: View, x: number, y: number, d: number) => dot([x - v.eye[0], y - v.eye[1], d - v.eye[2]], v.forward)
 
 // Where (east, up, north) meters land on screen, and how near; nowhere
 // (NaN) behind the eye.
 const project = (v: View, x: number, y: number, d: number) => {
-  const q: Vec = [x, y - EYE, d]
+  const q: Vec = [x - v.eye[0], y - v.eye[1], d - v.eye[2]]
   const far = dot(q, v.forward)
   if (far < 0.3) return [NaN, NaN, -Infinity] as const
   return [v.cx + (v.f * dot(q, v.right)) / far, v.cy - (v.f * dot(q, v.up)) / far, -far] as const
 }
 
-// The ground as seen, made once for each way the eye looks: each pixel's
-// line of sight followed down to the ground, out to the horizon 2.4 km off
-// where the Moon curves away, and there grey dust, darker patches, and
+// Where a point of a figure standing at (x, d) lands: `across` meters along
+// its face, which is turned to the eye, `up` meters up and `deep` meters
+// back from it.
+const standing = (v: View, x: number, d: number, across: number, up: number, deep = 0) =>
+  project(v, x + across * v.right[0] + deep * v.along[0], up, d + across * v.right[2] + deep * v.along[2])
+
+// The ground as seen, made once for each place and way the eye looks: each
+// pixel's line of sight followed down to the ground, out to the horizon
+// where the Moon curves away (2.3 km off from a man's height), and there grey dust, darker patches, and
 // craters lit on their western walls and dark on their eastern, the sun
 // being in the east. Where on the ground each pixel lands is kept for the
 // shadows; NaN where it sees sky.
 type Ground = { colors: Uint32Array; east: Float32Array; north: Float32Array }
 
 const grounds = new Map<string, Ground>()
-const HORIZON = 2400
+// The Moon's radius in meters: the horizon from `h` meters up is this far off.
+const MOON_RADIUS = 1_737_400
 
 function groundOf(c: Canvas, v: View): Ground {
-  const key = `${c.width}x${c.height}:${v.f}:${v.cx}:${v.forward.join()}`
+  const key = `${c.width}x${c.height}:${v.f}:${v.cx}:${v.cy}:${v.eye.join()}:${v.forward.join()}`
   const known = grounds.get(key)
   if (known) return known
   if (grounds.size > 6) grounds.clear()
@@ -905,14 +919,15 @@ function groundOf(c: Canvas, v: View): Ground {
     return { x: (next() * 2 - 1) * d * 0.9, d, r: 0.3 + (0.6 + 0.04 * d) * next() ** 2 }
   })
   const made = { colors: new Uint32Array(c.width * c.height), east: new Float32Array(c.width * c.height).fill(NaN), north: new Float32Array(c.width * c.height).fill(NaN) }
+  const horizon = Math.sqrt(2 * MOON_RADIUS * v.eye[1])
   for (let py = 0; py < c.height; py++) {
     for (let px = 0; px < c.width; px++) {
       const [across, down] = [(px + 0.5 - v.cx) / v.f, (py + 0.5 - v.cy) / v.f]
       const sight = plus(plus(v.forward, v.right, across), v.up, -down)
       if (sight[1] >= 0) continue
-      const reach = EYE / -sight[1]
-      if (reach > HORIZON) continue
-      const [x, d] = [reach * sight[0], reach * sight[2]]
+      const reach = v.eye[1] / -sight[1]
+      if (reach > horizon) continue
+      const [x, d] = [v.eye[0] + reach * sight[0], v.eye[2] + reach * sight[2]]
       const i = py * c.width + px
       made.east[i] = x
       made.north[i] = d
@@ -966,8 +981,16 @@ function drawEarthAbove(c: Canvas, v: View, levels: number) {
   if (far < 0.1) return
   const x = v.cx + (v.f * dot(EARTH_WAY, v.right)) / far
   const y = v.cy - (v.f * dot(EARTH_WAY, v.up)) / far
-  const r = Math.max(1.2, (v.f * EARTH_ANGLE) / far)
-  if (x + r < 0 || x - r > c.width || y + r < 0 || y - r > c.height) return
+  // Never smaller than a dot that can be found, as the rocket is drawn bigger than it is.
+  const r = Math.max(4.5, (v.f * EARTH_ANGLE) / far)
+  if (x + 2.5 * r < 0 || x - 2.5 * r > c.width || y + 2.5 * r < 0 || y - 2.5 * r > c.height) return
+  // A faint blue glow round it in the black: the pale blue dot.
+  for (let py = Math.floor(y - 2.5 * r); py <= Math.ceil(y + 2.5 * r); py++) {
+    for (let px = Math.floor(x - 2.5 * r); px <= Math.ceil(x + 2.5 * r); px++) {
+      const d = Math.hypot(px + 0.5 - x, py + 0.5 - y) / r
+      if (d > 1 && d < 2.5) glow(c, px, py, 0x6f9fe8, 0.4 * ((2.5 - d) / 1.5) ** 2, -1e8)
+    }
+  }
   // Earth's north where the Moon's north falls on the screen.
   const north: Vec = [0, 0, 1]
   const roll = Math.atan2(dot(north, v.up), dot(north, v.right)) - Math.PI / 2
@@ -1030,12 +1053,12 @@ function line(c: Canvas, a: readonly [number, number], b: readonly [number, numb
 // east. `x` and `y` are its middle's place east of the eye and its height;
 // `isOpen` whether the hatch is, `isDown` whether its probes have touched.
 function drawEagle(c: Canvas, v: View, x: number, y: number, isOpen: boolean, isDown: boolean) {
-  const at = (lx: number, ly: number, dd = 0) => project(v, x + lx, y + ly, LM_D + dd)
+  const at = (lx: number, ly: number, dd = 0) => standing(v, x, LM_D, lx, y + ly, dd)
   const p = (lx: number, ly: number, dd = 0) => {
     const [px, py] = at(lx, ly, dd)
     return [px, py] as const
   }
-  const s = v.f / LM_D
+  const s = v.f / Math.max(1, ahead(v, x, 3, LM_D))
   const z = -ahead(v, x, 3, LM_D)
   const strut = Math.max(1, 0.16 * s)
   // How the sun from the east falls across a part `from` to `to` meters east to west.
@@ -1109,10 +1132,10 @@ type Gait = 'stand' | 'walk' | 'climb' | 'plant' | 'salute'
 // An astronaut at (x, y, d), meters east, up and north of the eye, facing
 // `way` (1 east, -1 west): white suit, the backpack behind, gold visor.
 function drawWalker(c: Canvas, v: View, x: number, y: number, d: number, way: number, gait: Gait, stride: number) {
-  const s = v.f / d
+  const s = v.f / Math.max(1, ahead(v, x, 1, d))
   const z = -ahead(v, x, 1, d) + 0.5
   const p = (lx: number, ly: number) => {
-    const [px, py] = project(v, x + lx * way, y + ly, d)
+    const [px, py] = standing(v, x, d, lx * way, y + ly)
     return [px, py] as const
   }
   const thick = Math.max(1.2, 0.17 * s)
@@ -1160,19 +1183,19 @@ function drawWalker(c: Canvas, v: View, x: number, y: number, d: number, way: nu
 // The flag: its pole pushed `planted` of the way in, its crossbar out
 // `unfurled` of the way and the flag hanging from it, rippled.
 function drawFlag(c: Canvas, v: View, x: number, d: number, planted: number, unfurled: number) {
-  const s = v.f / d
+  const s = v.f / Math.max(1, ahead(v, x, 1, d))
   const z = -ahead(v, x, 1, d) + 0.4
   const high = 0.35 * (1 - planted)
   const top = 2.25 + high
-  const at = (east: number, up: number) => {
-    const [px, py] = project(v, east, up, d)
+  const at = (across: number, up: number) => {
+    const [px, py] = standing(v, x, d, across, up)
     return [px, py] as const
   }
-  line(c, at(x, high - 0.1), at(x, top), Math.max(1, 0.05 * s), 0xd8d4cc, z)
+  line(c, at(0, high - 0.1), at(0, top), Math.max(1, 0.05 * s), 0xd8d4cc, z)
   const wide = 1.52 * Math.max(0.08, unfurled)
-  line(c, at(x, top), at(x + wide, top), 1, 0xd8d4cc, z)
-  const [left, upper] = project(v, x, top, d)
-  const [right, lower] = project(v, x + wide, top - 0.91, d)
+  line(c, at(0, top), at(wide, top), 1, 0xd8d4cc, z)
+  const [left, upper] = at(0, top)
+  const [right, lower] = at(wide, top - 0.91)
   for (let py = Math.max(0, Math.floor(upper) + 1); py <= Math.min(c.height - 1, Math.ceil(lower)); py++) {
     for (let px = Math.max(0, Math.ceil(left)); px <= Math.min(c.width - 1, Math.floor(right)); px++) {
       const fx = (px + 0.5 - left) / Math.max(1, right - left)
@@ -1189,9 +1212,9 @@ function drawFlag(c: Canvas, v: View, x: number, d: number, planted: number, unf
 
 // The surface: Eagle coming down `land` seconds into its landing, or
 // `isLongDown`, landed in an earlier turn; the moonwalk `step` seconds in,
-// if begun; and the eye where the person has turned it, once the flag is up.
-function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDown: boolean, time: number, levels: number, look?: Look) {
-  const v = viewOf(c, step !== undefined && step >= CLOSE, look)
+// if begun; and the eye pulled `back` from the flag, 0 to 1, once it is up.
+function surfaceShot(c: Canvas, land: number, step: number | undefined, isLongDown: boolean, time: number, levels: number, back: number) {
+  const v = viewOf(c, step !== undefined && step >= CLOSE, back)
   const ground = groundOf(c, v)
   c.color.fill(0)
   c.depth.fill(-Infinity)
