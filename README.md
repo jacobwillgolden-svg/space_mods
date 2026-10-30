@@ -39,9 +39,9 @@ requests and tool calls, or by its task list where it keeps one:
   asteroid at low, a comet at xhigh, a metal one at max.
 - **apollo** (`/probe apollo`): Apollo 11, over black and the stars, with the
   real Earth and Moon lit as they were in July 1969, going only forward from
-  turn to turn. The first turn the Saturn V lifts off from pad 39A, drops its
-  stages, makes Earth orbit and burns for the Moon, and Columbia turns round to
-  dock with Eagle; the coast out goes as far as the turn has got, and when
+  turn to turn. As it is asked for the Saturn V lifts off from pad 39A, drops
+  its stages, makes Earth orbit and burns for the Moon, and Columbia turns round
+  to dock with Eagle; the coast out goes as far as the turn has got, and when
   Claude stops, Apollo goes behind the Moon into lunar orbit. Turns after that
   go on in lunar orbit, Eagle readied as each gets on: the burn that rounds out
   the orbit, Neil and Buzz powering Eagle up, its landing gear out. A
@@ -65,10 +65,14 @@ about the pointer; right-click to put it back.
 | --- | --- |
 | `on`, `off` | the probe in the dashboard's place, or off it, kept across sessions |
 | `orbit`, `survey`, `asteroid`, `apollo`, `follow` | keep a scene whatever the mode, or follow the mode again |
-| `jupiter`, `saturn`, ... `effort` | keep a world whatever the effort, or let the effort pick again |
+| `jupiter`, `saturn`, ... `effort` | keep a world whatever the effort, or let the effort pick again; Apollo 11, with its own Earth and Moon, stands down for it |
 | `juno`, `voyager`, `cassini`, ... | the craft Claude flies (Juno unless asked) |
 | `labels on`, `labels off` | names over the craft, where the picture is fine enough |
 | `sound on`, `sound off` | blips, chirps, a laser and a boom; off until asked for |
+
+Each shows at once, with no turn or restart for it, and from any session: one
+typed in another shell reaches the panel's within two seconds. The panel itself
+is closed while the dashboard's grid has a shell, and comes back with the change.
 
 ### Install
 

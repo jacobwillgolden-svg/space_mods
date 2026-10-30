@@ -2,10 +2,10 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
 import type { Effort, Scene, Target, Tasks, WorldName } from '../types'
-import { moveOf } from './apollo'
+import { DOCKED, moveOf } from './apollo'
 import type { Told } from './caption'
 import { CRAFT } from './craft'
-import { LEAVE_SECONDS, TICK_MS, beatsOf, endingTicksOf, isCoasting, progressOf, progressStage, sceneFor } from './frame'
+import { ARRIVE_TICKS, LEAVE_SECONDS, TICK_MS, beatsOf, endingTicksOf, isCoasting, progressOf, progressStage, sceneFor } from './frame'
 import type { FrameState } from './frame'
 import { findMirror, panelShows, publish } from './mirror'
 import type { Mirror, Showing } from './mirror'
@@ -163,6 +163,7 @@ async function publishScene($: EngineInterface) {
 async function watchPanel($: EngineInterface) {
   if (mirror === undefined) return
 
+  await takeUpStore($).catch(() => undefined)
   const now = await panelShows($, mirror)
   if (now === shown) return
   shown = now
@@ -296,13 +297,36 @@ async function goFor($: EngineInterface, move: 'land' | 'step') {
   }
 }
 
-// A standing target of another scene is swapped for a fresh one; one already
-// ending plays out, and the next turn brings the new scene.
+// `scene` up now: between turns the last turn's progress goes with its target,
+// and the clock runs fast for as long as the new one takes to arrive.
+async function bringScene($: EngineInterface, scene: Scene) {
+  if (!isTurnRunning) {
+    await update($, work, () => 0)
+    await update($, tasks, () => null)
+    await update($, flown, () => 0)
+  }
+  await freshTarget($, scene)
+  animateUntil = (await read($, tick)) + (scene === 'apollo' ? Math.ceil((DOCKED * 1000) / TICK_MS) : ARRIVE_TICKS[scene])
+  startTicking($)
+}
+
+// The mode moved on: a standing target of another scene is swapped for a fresh
+// one; one already ending plays out, and the next turn brings the new scene.
 async function showScene($: EngineInterface, scene: Scene) {
   const current = await read($, target)
   if (current.phase !== 'whole' || current.scene === scene) return
 
-  await freshTarget($, scene)
+  await bringScene($, scene)
+}
+
+// The person asked for `scene`: it shows now, whatever the probe was doing,
+// unless it is up already. One played out comes back fresh, but Apollo 11 only
+// goes forward, and stays where the mission got to until the flag is up.
+async function askScene($: EngineInterface, scene: Scene) {
+  const current = await read($, target)
+  if (current.scene === scene && (current.phase !== 'gone' || goesOn(current))) return
+
+  await bringScene($, scene)
 }
 
 // The classic hooks report the permission mode; the scene follows it.
@@ -313,10 +337,41 @@ async function noteMode($: EngineInterface, seen: string | undefined) {
   await showScene($, (await read($, pinned)) ?? sceneFor(seen))
 }
 
+// Into the store first, where takeUpStore would otherwise read the old value back.
 async function pin($: EngineInterface, scene: Scene | null) {
-  await update($, pinned, () => scene)
   await $.store.set('scene', scene)
-  await showScene($, scene ?? sceneFor(await read($, mode)))
+  await update($, pinned, () => scene)
+  await askScene($, scene ?? sceneFor(await read($, mode)))
+}
+
+// What /probe keeps, as the store has it: when a session starts, and every look
+// at the panel after that, so a /probe typed in another session, as in a shell
+// of the dashboard's grid, reaches this one, the one the panel draws.
+async function takeUpStore($: EngineInterface) {
+  const scene = toScene(await $.store.get('scene')) ?? null
+  if (scene !== (await read($, pinned))) await pin($, scene)
+
+  const visits = toWorld(await $.store.get('world')) ?? null
+  if (visits !== (await read($, world))) await update($, world, () => visits)
+
+  const isLabeled = (await $.store.get('labels')) === true
+  if (isLabeled !== (await read($, labels))) await update($, labels, () => isLabeled)
+
+  const named = await $.store.get('craft')
+  const flies = craftOf(typeof named === 'string' ? named : null) ?? 0
+  const name = flies === 0 ? null : (CRAFT[flies]?.name ?? null)
+  if (flies !== claudeFlies || name !== (await read($, craft))) {
+    claudeFlies = flies
+    await update($, craft, () => name)
+    await recast($)
+  }
+}
+
+// What /probe adds to what it did when that won't be seen from here, the panel
+// being closed, or another's: /probe on says what holds it up.
+async function unseen($: EngineInterface): Promise<string> {
+  await watchPanel($)
+  return shown === 'probe' ? '' : " It shows once the dashboard's panel draws the probe: /probe on says what holds it up."
 }
 
 // /probe's words, and what each says once done.
@@ -349,18 +404,7 @@ export const register: Register = on => {
       if (saved !== undefined) await update($, effort, () => saved)
     }
 
-    const kept = toScene(await $.store.get('scene'))
-    if (kept !== undefined) {
-      await update($, pinned, () => kept)
-      await showScene($, kept)
-    }
-    const visits = toWorld(await $.store.get('world'))
-    if (visits !== undefined) await update($, world, () => visits)
-    if ((await $.store.get('labels')) === true) await update($, labels, () => true)
-    const named = await $.store.get('craft')
-    const flies = craftOf(typeof named === 'string' ? named : null)
-    claudeFlies = flies ?? 0
-    await update($, craft, () => (flies === undefined ? null : (CRAFT[flies]?.name ?? null)))
+    await takeUpStore($)
     // A new session starts with no agents at work.
     agents.clear()
     await update($, helpers, () => ({}))
@@ -423,35 +467,37 @@ export const register: Register = on => {
 
     if (scene !== undefined || asked === 'follow') {
       await pin($, scene ?? null)
-      const does = scene === 'asteroid' ? 'mine asteroids' : scene === 'apollo' ? 'fly Apollo 11 to the Moon' : scene
-      const how = scene === 'apollo' ? ': each turn launches, a commit lands Eagle, a push puts Neil on the Moon.' : '.'
-      return { text: scene === undefined ? 'The scene follows the permission mode again.' : `The probe will ${does} whatever the mode${how}` }
+      const does = scene === 'asteroid' ? 'mines asteroids' : scene === 'apollo' ? 'flies Apollo 11 to the Moon' : `${scene}s`
+      const how = scene === 'apollo' ? ': a commit lands Eagle, a push puts Neil on the Moon.' : '.'
+      return { text: `${scene === undefined ? 'The scene follows the permission mode again.' : `The probe ${does} whatever the mode${how}`}${await unseen($)}` }
     }
     // A world kept whatever the effort, from now and in new sessions; `effort` lets the effort pick again.
     if (visits !== undefined || asked === 'effort') {
-      await update($, world, () => visits ?? null)
       await $.store.set('world', visits ?? null)
-      return {
-        text: visits === undefined
-          ? 'The effort level picks the world again.'
-          : `The probe visits ${WORLDS[visits].title} whatever the effort: /probe effort lets the effort pick again.`,
-      }
+      await update($, world, () => visits ?? null)
+      // Apollo 11 draws its own Earth and Moon, so it stands down for a world to show.
+      const standsDown = (await read($, pinned)) === 'apollo'
+      if (standsDown) await pin($, null)
+      const picks = visits === undefined
+        ? 'The effort level picks the world again.'
+        : `The probe visits ${WORLDS[visits].title} whatever the effort: /probe effort lets the effort pick again.`
+      return { text: `${picks}${standsDown ? ' Apollo 11 stands down: /probe apollo launches it again.' : ''}${await unseen($)}` }
     }
     // Claude flies another craft, by name, from now and in new sessions. An agent flying the same one is recast.
     const flies = craftOf(asked)
     if (flies !== undefined) {
       claudeFlies = flies
       const name = CRAFT[flies]?.name ?? null
-      await update($, craft, () => (flies === 0 ? null : name))
       await $.store.set('craft', flies === 0 ? null : name)
+      await update($, craft, () => (flies === 0 ? null : name))
       await recast($)
       return { text: flies === 0 ? 'Claude flies Juno again.' : `Claude flies ${name} now: /probe juno brings Juno back.` }
     }
     // Names over the craft, off until asked for; `labels` alone flips them.
     if (ON_OFF(asked, 'labels')) {
       const shown = asked === 'labels' ? !(await read($, labels)) : asked === 'labels on'
-      await update($, labels, () => shown)
       await $.store.set('labels', shown)
+      await update($, labels, () => shown)
       return {
         text: shown
           ? 'Names show over the craft where the picture is fine enough: /probe labels off hides them.'

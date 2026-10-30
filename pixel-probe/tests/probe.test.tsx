@@ -304,7 +304,7 @@ test('/probe apollo flies Apollo 11 each turn: off the pad, out as far as the tu
   const seen = engine(on, { effortLevel: 'high' })
   await start($)
   expect((await probe($, 'apollo')).text).toBe(
-    'The probe will fly Apollo 11 to the Moon whatever the mode: each turn launches, a commit lands Eagle, a push puts Neil on the Moon.',
+    'The probe flies Apollo 11 to the Moon whatever the mode: a commit lands Eagle, a push puts Neil on the Moon.',
   )
 
   await prompt($, 'default')
@@ -587,7 +587,7 @@ test('/probe keeps a scene, a world and a craft, across sessions, and lets each 
   const seen = engine(on, { effortLevel: 'low' })
   await start($)
 
-  expect((await probe($, 'asteroid')).text).toBe('The probe will mine asteroids whatever the mode.')
+  expect((await probe($, 'asteroid')).text).toBe('The probe mines asteroids whatever the mode.')
   await prompt($, 'default')
   await $.turn.start({ text: 'go', turnId: 't1' })
   await shown(seen, /mining\.\.\. stony asteroid/)
@@ -606,6 +606,139 @@ test('/probe keeps a scene, a world and a craft, across sessions, and lets each 
   expect((await probe($, 'juno')).text).toBe('Claude flies Juno again.')
   expect(await flown(seen)).toBe('Juno')
   expect(Object.fromEntries(seen.stored)).toMatchObject({ scene: null, world: null, craft: null })
+})
+
+// A turn over and its ending played out, as the probe stands between turns.
+async function turnOver($: Engine, seen: Seen, mode: string) {
+  await prompt($, mode)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await work($, 8)
+  await stop($, mode)
+  await complete($, 't1')
+  await seen.clock.advance(60_000)
+  expect((await lastTold(seen)).state.target.phase).toBe('gone')
+}
+
+test('a scene asked for between turns shows at once, with no turn for it, and the next turn goes on with it', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await turnOver($, seen, 'default')
+
+  expect((await probe($, 'survey')).text).toBe('The probe surveys whatever the mode.')
+  const { state } = await lastTold(seen)
+  expect(state.target).toMatchObject({ phase: 'whole', scene: 'survey' })
+  expect(state.work).toBe(0)
+  await shown(seen, /default mode · idle/)
+
+  // It flies in on the fast clock, not a frame a second.
+  const before = (await lastTold(seen)).state.tick ?? 0
+  await seen.clock.advance(500)
+  expect(((await lastTold(seen)).state.tick ?? 0) - before).toBe(5)
+
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  await shown(seen, /surveying\.\.\. 0% mapped/)
+})
+
+test('a scene asked for cuts short an ending, and one played out comes back fresh', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await prompt($, 'default')
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await stop($, 'default')
+  await complete($, 't1')
+  await probe($, 'asteroid')
+  expect((await lastTold(seen)).state.target).toMatchObject({ phase: 'whole', scene: 'asteroid' })
+
+  await prompt($, 'default')
+  await $.turn.start({ text: 'go', turnId: 't2' })
+  await stop($, 'default')
+  await complete($, 't2')
+  await seen.clock.advance(60_000)
+  expect((await lastTold(seen)).state.target.phase).toBe('gone')
+  await probe($, 'asteroid')
+  expect((await lastTold(seen)).state.target).toMatchObject({ phase: 'whole', scene: 'asteroid' })
+})
+
+test('a world asked for shows at once, and Apollo 11 stands down for it', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await probe($, 'mars')
+  await shown(seen, /^Mars$/)
+  await turnOver($, seen, 'default')
+  await probe($, 'saturn')
+  await shown(seen, /^Saturn$/)
+
+  await probe($, 'apollo')
+  await shown(seen, /^Apollo 11$/)
+  expect((await probe($, 'neptune')).text).toBe(
+    'The probe visits Neptune whatever the effort: /probe effort lets the effort pick again. Apollo 11 stands down: /probe apollo launches it again.',
+  )
+  await shown(seen, /^Neptune$/)
+  expect((await lastTold(seen)).state.target).toMatchObject({ phase: 'whole', scene: 'orbit' })
+  expect(Object.fromEntries(seen.stored)).toMatchObject({ scene: null, world: 'neptune' })
+  await hidden(seen, /Apollo/)
+})
+
+test('/probe apollo again keeps the mission where it got to, until the flag is up', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await probe($, 'apollo')
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await seen.clock.advance(26_000)
+  await stop($, 'default')
+  await complete($, 't1')
+  await seen.clock.advance(ENDING_TICKS.apollo * TICK_MS + 200)
+  await shown(seen, /lunar orbit · a commit lands Eagle/)
+
+  await probe($, 'apollo')
+  await shown(seen, /lunar orbit · a commit lands Eagle/)
+
+  await $.turn.start({ text: 'ship it', turnId: 't2' })
+  await $.tool.call({ tool: 'Bash', command: 'git push' })
+  await stop($, 'default')
+  await complete($, 't2')
+  await seen.clock.advance(60_000)
+  await shown(seen, /the flag at Tranquility Base/)
+
+  await probe($, 'apollo')
+  await shown(seen, /ignition/)
+})
+
+test('a /probe typed in another session reaches this one, the one the panel draws, within a look at the panel', async ($, on) => {
+  const seen = engine(on, { effortLevel: 'high' })
+  await start($)
+  await turnOver($, seen, 'default')
+
+  seen.stored.set('scene', 'asteroid')
+  seen.stored.set('world', 'jupiter')
+  seen.stored.set('craft', 'Cassini')
+  seen.stored.set('labels', true)
+  await seen.clock.advance(2100)
+  const { state } = await lastTold(seen)
+  expect(state.target).toMatchObject({ phase: 'whole', scene: 'asteroid' })
+  await shown(seen, /^Jupiter$/)
+  expect(await flown(seen)).toBe('Cassini')
+  expect(state.isLabeled).toBe(true)
+
+  seen.stored.set('scene', null)
+  seen.stored.set('world', null)
+  seen.stored.set('craft', null)
+  await seen.clock.advance(2100)
+  expect((await lastTold(seen)).state.target).toMatchObject({ phase: 'whole', scene: 'orbit' })
+  await shown(seen, /^Earth$/)
+  expect(await flown(seen)).toBe('Juno')
+})
+
+test('/probe says so when what it did will not show from here', async ($, on) => {
+  const panel = { shows: undefined as string | undefined }
+  const seen = engine(on, { effortLevel: 'high' }, {}, { panel })
+  await start($)
+  expect((await probe($, 'mars')).text).toMatch(/visits Mars.*It shows once the dashboard's panel draws the probe/)
+  expect((await probe($, 'survey')).text).toMatch(/surveys.*It shows once the dashboard's panel draws the probe/)
+  expect(Object.fromEntries(seen.stored)).toMatchObject({ scene: 'survey', world: 'mars' })
+
+  panel.shows = 'probe'
+  expect((await probe($, 'orbit')).text).toBe('The probe orbits whatever the mode.')
 })
 
 test('what /probe kept is there when the next session starts', async ($, on) => {
