@@ -5,6 +5,7 @@ panoramas, as the Linux concept has Jupiter and Juno over the stars.
     python tools/wallpaper.py jupiter
     python tools/wallpaper.py saturn --panorama orion --size 2560x1440 --pixel 5
     python tools/wallpaper.py --all
+    python tools/wallpaper.py saturn --probe-at orbit
 
 Writes wallpapers/<world>-<panorama>.png. Needs Node 23.6 or newer (it runs
 the mod's TypeScript as it is), and Pillow.
@@ -21,16 +22,24 @@ OUT = ROOT / 'wallpapers'
 WORLDS = ['moon', 'mars', 'earth', 'saturn', 'jupiter', 'neptune', 'pluto']
 # Each world's own sky by default: the scene it is most often seen in suits it.
 SKY = {'moon': 'violet', 'mars': 'ember', 'earth': 'violet', 'saturn': 'orion', 'jupiter': 'violet', 'neptune': 'violet', 'pluto': 'orion'}
+# Saturn's rings reach past the probe's orbit, so a panel always crosses them:
+# its probe hangs clear of them instead.
+PROBE_AT = {'saturn': '0.31,0.767'}
+# When the probe on its orbit is behind the world, as it must be to hang elsewhere.
+BEHIND_SECONDS = 6.0
 
 
 def layer(world: str, width: int, height: int, args: argparse.Namespace) -> Image.Image:
     """The world over nothing, `width` by `height` of its own pixels."""
     pan_x, pan_y = (float(n) for n in args.pan.split(','))
+    spot = args.probe_at or PROBE_AT.get(world, 'orbit')
+    probe_at = [] if spot == 'orbit' else [str(float(n)) for n in spot.split(',')]
+    seconds = args.time if args.time is not None else BEHIND_SECONDS if probe_at else 4.0
     command = [
         'node', '--no-warnings', '--import', './tools/ts-loader.mjs', 'tools/layer.mjs',
-        world, str(width), str(height), str(args.time), str(args.zoom), str(pan_x), str(pan_y), args.craft,
+        world, str(width), str(height), str(seconds), str(args.zoom), str(pan_x), str(pan_y), args.craft, *probe_at,
     ]
-    rgba = subprocess.run(command, cwd=ROOT, check=True, capture_output=True).stdout
+    rgba = subprocess.run(command, cwd=ROOT, check=True, stdout=subprocess.PIPE).stdout
     return Image.frombytes('RGBA', (width, height), rgba)
 
 
@@ -64,7 +73,8 @@ def main() -> None:
     parser.add_argument('--pixel', type=int, default=4, help='how many screen pixels wide each of the world\'s pixels is')
     parser.add_argument('--zoom', type=float, default=1.45, help='how much bigger than in the pane the world is drawn')
     parser.add_argument('--pan', default='-0.12,0.06', help='where the view looks off the middle, as fractions of the screen: x,y')
-    parser.add_argument('--time', type=float, default=4.0, help='seconds into its orbits: where the moons and the probe are')
+    parser.add_argument('--time', type=float, help='seconds into its orbits: where the moons and the probe are (4, or 6 with the probe off its orbit; then only 6, 18, 30... will do)')
+    parser.add_argument('--probe-at', help="where the probe hangs instead of on its orbit, as fractions of the screen from its left and top: x,y; or 'orbit' (the orbit by default, Saturn's clear of its rings)")
     parser.add_argument('--craft', default='juno', help='the craft drawn orbiting it')
     parser.add_argument('--dim', type=float, default=0.8, help='how bright the panorama is kept, 0 to 1')
     args = parser.parse_args()

@@ -100,6 +100,11 @@ python tools/wallpaper.py saturn --panorama orion --size 2560x1440 --pixel 5
 python tools/wallpaper.py --all
 ```
 
+Saturn's rings reach past the probe's orbit, so its probe hangs clear of them
+by default; `--probe-at x,y` puts the probe anywhere on the screen, drawn at a
+moment its orbit has it behind the world (`--time` 6, 18, 30...), and
+`--probe-at orbit` puts it back on its orbit.
+
 They land in `wallpapers/`. It needs Node 23.6 or newer (to run the mod's
 TypeScript as it is) and Pillow. In kitty, `background_image` in kitty.conf,
 or `kitten @ set-background-image` for the window you are in.
