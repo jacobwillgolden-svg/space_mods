@@ -90,6 +90,64 @@ then Plugins, Add marketplace with `jacobwillgolden-svg/space_mods`, then Add pl
 To run it from a clone instead: `claude --plugin-dir ./pixel-probe`, or name
 the folder in `CLAUDE_CODE_PLUGIN_DIRS`.
 
+## Other mods
+
+Three more Claude Code mods that are not about space. Like the probe, each is
+a set of function hooks with tests, written for kitty on Windows
+([win-kitty](https://github.com/jacobwillgolden-svg/win-kitty-fork)).
+
+### kitty-mood
+
+The kitty window reacts to Claude. Its background leans towards a colour for
+the permission mode (plan blue, auto red, accept-edits violet), the tab
+breathes while Claude works, and the whole window flashes as a turn ends:
+green when it answered, amber when it was stopped, red when it failed. The
+title bar says the mode, the session's topic, what Claude is doing, how many
+agents are out and how long the turn has run. The topic is Claude Code's own
+session title once there is one; until then a small model names the session
+from its first prompt (`$.model.complete`, `hooks/register.ts`).
+
+| Command | What it does |
+|---|---|
+| `/kitty mood on\|off` | the tint, the tab and the flash |
+| `/kitty title on\|off` | the title bar |
+| `/opacity 1-100`, `/opacity reset` | how see-through the window is until Claude exits; kitty needs `dynamic_background_opacity yes` |
+| `/win-kitty` | asks mc-rice's dashboard for a shell in its grid; with no dashboard it says so |
+
+It reaches kitty by remote control, with a password that may only restyle a
+window. In kitty's config folder, `claude-rc.conf`:
+
+```
+listen_on tcp:127.0.0.1:0
+allow_remote_control password
+remote_control_password "<a long random password>" set-colors set-tab-color set-window-title set-background-opacity set-user-vars
+```
+
+Put the same password, alone, in `claude-rc.pw` beside it, add
+`include claude-rc.conf` to `kitty.conf`, and start Claude in a kitty opened
+after that. What it changes is put back as the session ends.
+
+### predict
+
+Predictive text for the prompt box, the way a phone's keyboard has it. As you
+type, three guesses follow the word at the caret, finishing it or offering
+the next, learnt from the prompts you have sent before (Claude Code's
+`history.jsonl`, read on your own machine; `hooks/words.ts`). A typo is
+offered as the word it was a slip for. In an empty box after a turn the
+guesses are whole prompts: what git's state suggests at once (commit, push, a
+merge), then three from a fork of the conversation (`$.model.fork`,
+`hooks/guess.ts`), with the prompts you send often.
+
+The guesses are shown as three ovals by a strip on mc-rice's dashboard, which
+is not in this repo, so on its own the mod works them out and shows nothing.
+`/predict on|off`.
+
+### aura-sync
+
+`/aurasync on|off` keeps one choice, which mc-rice's dashboard reads to give
+its jukebox the colours of an ASUS laptop's Aura lighting, and says in words
+which effect it found. It only reads Aura's `LastScript.xml`.
+
 ## Wallpapers
 
 ![Jupiter and Juno in pixels over the violet panorama](docs/wallpaper.jpg)
@@ -127,7 +185,8 @@ one's colors:
 - `python pixel-probe/tools/sounds.py` synthesizes the clips in
   `pixel-probe/sounds/` (numpy).
 - `claude plugin validate pixel-probe` and `claude plugin test pixel-probe`
-  check the mod.
+  check the mod; the same two commands check `kitty-mood`, `predict` and
+  `aura-sync`.
 
 ## License
 

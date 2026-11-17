@@ -1,0 +1,9 @@
+{
+  "name": "kitty-mood",
+  "version": "0.1.0",
+  "description": "win-kitty reacts to Claude: the window is tinted by permission mode, flashes when a turn ends, and its title bar says what Claude is doing",
+  "author": {
+    "name": "jacobwillgolden-svg"
+  },
+  "license": "MIT"
+}

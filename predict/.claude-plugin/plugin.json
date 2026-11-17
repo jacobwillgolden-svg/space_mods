@@ -1,0 +1,9 @@
+{
+  "name": "predict",
+  "version": "0.1.0",
+  "description": "Predictive text, three ways: as each turn ends, three guesses at your next prompt as ovals under the prompt on mc-rice's dashboard, in the look of whichever mod holds it; a click sends one",
+  "author": {
+    "name": "jacobwillgolden-svg"
+  },
+  "license": "MIT"
+}

@@ -9,6 +9,21 @@
       "name": "pixel-probe",
       "source": "./pixel-probe",
       "description": "A pixel-art space probe beside the chat, orbiting a world that tracks Claude's effort level"
+    },
+    {
+      "name": "kitty-mood",
+      "source": "./kitty-mood",
+      "description": "The kitty window reacts to Claude: tinted by permission mode, a flash as a turn ends, a title bar that says what Claude is doing, and /opacity"
+    },
+    {
+      "name": "predict",
+      "source": "./predict",
+      "description": "Predictive text for the prompt box: three guesses as you type and after each turn, shown by a strip on mc-rice's dashboard"
+    },
+    {
+      "name": "aura-sync",
+      "source": "./aura-sync",
+      "description": "/aurasync on: mc-rice's jukebox follows an ASUS laptop's Aura lighting, only reading it"
     }
   ]
 }
