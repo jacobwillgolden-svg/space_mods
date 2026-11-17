@@ -1,0 +1,9 @@
+{
+  "name": "aura-sync",
+  "version": "0.1.0",
+  "description": "/aurasync on: mc-rice's jukebox follows the laptop's Aura lighting, only reading it",
+  "author": {
+    "name": "jacobwillgolden-svg"
+  },
+  "license": "MIT"
+}
